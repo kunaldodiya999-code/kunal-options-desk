@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kunal Options Desk</title>
+<link rel="stylesheet" href="/a/style.css">
+</head>
+<body>
+<header id="top">
+  <b class="brand">KUNAL OPTIONS DESK</b>
+  <select id="index"><option value="NIFTY">NIFTY</option><option value="BANKNIFTY">BANK NIFTY</option><option value="SENSEX">SENSEX</option></select>
+  <select id="tf"><option value="1">1 min</option><option value="3">3 min</option><option value="5" selected>5 min</option><option value="15">15 min</option></select>
+  <select id="instrument"><option value="FUT">Future</option><option value="INDEX">Index (futures volume)</option></select>
+  <select id="broker" title="Data and orders come from this broker"><option value="FYERS">FYERS (live)</option><option value="DHAN" disabled>Dhan (coming later)</option></select>
+  <label class="chk"><input type="checkbox" id="opt_panel" checked> Options panel</label>
+  <span class="sp"></span>
+  <span id="status" class="muted">connecting...</span>
+  <button id="theme" title="Light / dark">◐ Theme</button>
+  <span id="clock" class="muted"></span>
+</header>
+
+<div id="layout">
+<main id="left">
+  <section class="card toggles" id="toggles">
+    <div class="trow"><span class="tlabel">CHART</span>
+      <label><input type="checkbox" data-t="volume" checked> Volume</label>
+      <label><input type="checkbox" data-t="bullbear" checked> Bull / bear volume</label>
+      <label><input type="checkbox" data-t="vwap" checked> VWAP</label>
+      <label><input type="checkbox" data-t="dayopen" checked> Day's open</label>
+      <label><input type="checkbox" data-t="prevday" checked> Previous day H / L / C</label>
+      <label><input type="checkbox" data-t="first30"> First 30 min range</label>
+      <label><input type="checkbox" data-t="bbvwap"> Bulls' and bears' VWAP</label>
+      <label><input type="checkbox" data-t="ema1"> EMA 1</label>
+      <label><input type="checkbox" data-t="ema2"> EMA 2</label></div>
+    <div class="trow"><span class="tlabel">OPTIONS</span>
+      <label><input type="checkbox" data-t="oiwalls" checked> OI walls</label>
+      <label><input type="checkbox" data-t="oi_total" checked> OI profile: Total (live) OI</label>
+      <label><input type="checkbox" data-t="oi_change"> OI profile: OI change today</label>
+      <label><input type="checkbox" data-t="cpcharts" checked> Call and put charts</label>
+      <label><input type="checkbox" data-t="strip" checked> Bull / bear strip</label>
+      <label><input type="checkbox" data-t="adaptive" checked> Adaptive average</label>
+      <label><input type="checkbox" data-t="trapped" checked> Trapped positions</label>
+      <label><input type="checkbox" data-t="maths" checked> Option maths</label>
+      <label><input type="checkbox" data-t="hedging" checked> Hedging pressure</label></div>
+    <div class="trow"><span class="tlabel">MARKS</span>
+      <label><input type="checkbox" data-t="m_lean" checked> Lean</label>
+      <label><input type="checkbox" data-t="m_calls_added" checked> Calls added</label>
+      <label><input type="checkbox" data-t="m_calls_exiting" checked> Calls exiting</label>
+      <label><input type="checkbox" data-t="m_puts_added" checked> Puts added</label>
+      <label><input type="checkbox" data-t="m_puts_exiting" checked> Puts exiting</label>
+      <label><input type="checkbox" data-t="m_div" checked> Divergence</label>
+      <label><input type="checkbox" data-t="m_trapped" checked> Trapped</label></div>
+  </section>
+
+  <section class="card chartcard">
+    <div class="legend" id="legend"></div>
+    <div id="main" class="chart"></div><canvas id="profile"></canvas><div id="tip" class="tip"></div>
+    <div id="striprow"><canvas id="strip"></canvas></div>
+  </section>
+  <section class="card chartcard small">
+    <div class="legend" id="flowlegend"></div>
+    <div id="flow" class="chart"></div>
+  </section>
+
+  <section class="card" id="cpcard">
+    <div class="head"><b>CALL AND PUT CHARTS</b><span class="sp"></span>Strike
+      <select id="strike"><option value="">ATM (follows the price)</option></select></div>
+    <div class="two"><div class="mini"><div class="legend" id="celeg"></div><div id="cechart" class="chart"></div></div>
+      <div class="mini"><div class="legend" id="peleg"></div><div id="pechart" class="chart"></div></div></div>
+  </section>
+
+  <section class="card" id="optcard">
+    <div class="head"><b>OPTIONS: OPEN INTEREST AND GREEKS</b><span class="muted" id="optmeta"></span></div>
+    <div class="row"><label class="chk"><input type="checkbox" id="explainer" checked> Explainer</label>
+      <label class="chk"><input type="checkbox" id="greeks" checked> Greeks</label>
+      Strikes each side <select id="each"><option>5</option><option selected>8</option><option>10</option><option>15</option></select></div>
+    <div id="saying"></div>
+    <div id="strip_summary" class="kpis"></div>
+    <div class="chart oichart" id="oichart"></div>
+    <div id="chainwrap"><table id="chain"></table></div>
+    <p class="muted small" id="chainnote">Reading (last 15 minutes): <b class="buying">buying</b> = OI up, premium up ·
+      <b class="writing">writing</b> = OI up, premium down · <b class="covering">covering</b> = OI down, premium up ·
+      <b class="unwinding">unwinding</b> = OI down, premium down. It is inferred from price and OI; who traded is not known.
+      Greeks are calculated here from the live option prices (Black-76). Hover a delta for gamma and vega. The 15-minute
+      columns fill in once the desk has been running that long.</p>
+  </section>
+
+  <section class="card" id="trapcard">
+    <div class="head"><b>TRAPPED POSITIONS</b><span class="muted" id="trapmeta"></span></div>
+    <div class="cards" id="trapcards"></div>
+    <table class="tbl" id="traptable"></table>
+    <p class="muted small">Each minute's rise in open interest is filed as buying or writing depending on whether the
+      premium rose or fell at that moment, and remembered at that premium. Comparing those build prices with the price
+      now shows which pockets are losing. Who actually traded is never known.</p>
+  </section>
+
+  <section class="card" id="mathcard">
+    <div class="head"><b>OPTION MATHS</b><span class="muted" id="mathmeta"></span></div>
+    <div class="cards" id="mathcards"></div>
+    <table class="tbl" id="mathtable"></table>
+  </section>
+
+  <section class="card" id="hedgecard">
+    <div class="head"><b>HEDGING PRESSURE</b><span class="muted" id="hedgemeta"></span></div>
+    <div class="cards" id="hedgecards"></div>
+    <table class="tbl" id="hedgetable"></table>
+  </section>
+</main>
+
+<aside id="right">
+  <section class="card"><div class="head"><b>LIVE PRICES</b></div><div id="live" class="kv"></div></section>
+  <section class="card"><details><summary><b>INDICATOR SETTINGS</b></summary>
+    <div class="kv form">
+      <label>EMA 1 length <input type="number" id="s_ema1" min="1" value="9"></label>
+      <label>EMA 2 length <input type="number" id="s_ema2" min="1" value="21"></label>
+      <label>OI profile width (px) <input type="number" id="s_pw" min="60" max="400" value="160"></label>
+      <label>Show values inside OI bars <input type="checkbox" id="s_pv" checked></label>
+      <label>Align strikes to the chart price (basis) <input type="checkbox" id="s_align"></label>
+    </div></details></section>
+  <section class="card"><div class="head"><b>WHAT HAPPENED</b></div><div id="log" class="log muted small"></div></section>
+  <section class="card muted small">New trade, discipline rules and journal come in phase 3 (paper first).</section>
+</aside>
+</div>
+
+<div id="login" class="overlay"><div class="card loginbox">
+  <h2>Log in with FYERS</h2>
+  <div id="appbox"><p>Step 1 (first time): your FYERS app from <b>myapi.fyers.in</b>. Saved in <code>.env</code> on this PC.</p>
+    <label>App ID <input id="l_id" placeholder="ABCD1234-100"></label>
+    <label>Secret ID <input id="l_secret" type="password"></label>
+    <label>Redirect URL <input id="l_redirect" value="http://127.0.0.1:8000"></label>
+    <button id="l_save">Save app details</button></div>
+  <div id="loginbox2"><p>Step 2: <a id="l_link" target="_blank" rel="noopener">Open FYERS login</a> (mobile, PIN, OTP).</p>
+    <p>Step 3: after login the browser opens your Redirect URL ("site can't be reached" is fine). Copy the WHOLE
+      address and paste it here:</p>
+    <input id="l_url" placeholder="http://127.0.0.1:8000/?s=ok&code=200&auth_code=...">
+    <button id="l_go" class="primary">Authorize</button></div>
+  <p id="l_msg" class="warn"></p>
+</div></div>
+
+<script>window.DESK_KEY = "__KEY__";</script>
+<script src="/a/lwc.js"></script>
+<script src="/a/app.js"></script>
+</body></html>
