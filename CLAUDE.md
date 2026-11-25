@@ -2,8 +2,16 @@
 
 - Owner: Kunal, about 10% coding knowledge, Windows + VS Code + PowerShell. Plain words, one step at a time, always
   give the folder: `C:\Users\USER\Desktop\Kunal\kunal-options-desk` (own `.venv`; Activate.ps1 is blocked on the
-  owner's PC, so use `.venv\Scripts\python.exe` / start_desk.bat). Setup: `python setup_pc.py`
-  (fyers-apiv3==3.2.0 installed --no-deps: its aiohttp pin cannot build on Python 3.13 Windows).
+  owner's PC, so use `.venv\Scripts\python.exe`). Owner uses DOUBLE-CLICK files: setup_desk.bat, demo_desk.bat,
+  start_desk.bat, update_desk.bat (git fetch + checkout origin/main, then setup; works even in a zip folder).
+  VS Code opens PowerShell one folder ABOVE the desk on the owner's PC: always give a full `cd` first.
+  Owner's PC runs Python 3.14 on Windows (25 Nov 2026). fyers-apiv3==3.2.0 is installed --no-deps (its aiohttp pin
+  cannot build there), so its own parts MUST be in requirements.txt (aws_lambda_powertools<2, websocket-client,
+  protobuf, setuptools<81). `tzdata` is needed on Windows (IST also falls back to a fixed +05:30).
+  Before pushing: check every package has a cp314 win_amd64 wheel or is pure Python
+  (`pip download --platform win_amd64 --python-version 3.14 --only-binary=:all: -r requirements.txt`).
+- FYERS login is shared: `.env` and today's `data/token.json` are read from a sibling kunal-fyers-terminal /
+  KunalQuant folder when this desk has none (same client id only). A FYERS login error -> service.logout -> login box.
 - Tests: `python -m pytest tests -q` (tests/conftest.py points KOD_DATA at a temp folder). Demo: `run.py --demo`.
 - Owner request 20 Nov 2026: single page like the "options desk" video (17 Nov) + ODX-style studies. FYERS primary,
   Dhan later. Light/dark TradingView-style chart. OI profile with two tick-boxes: Total (live) OI, OI change today.

@@ -115,6 +115,12 @@ class Feed:
 
     def stop(self) -> None:
         self._stop.set()
+        for sock, close in ((self.ws, "close_connection"), (self.ows, "close_connection")):
+            try:
+                if sock is not None:
+                    getattr(sock, close)()
+            except Exception:
+                pass
 
 
 __all__ = ["Feed"]

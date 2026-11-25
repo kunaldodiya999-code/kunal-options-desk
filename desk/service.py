@@ -25,8 +25,17 @@ from desk.analytics import (TrapBook, chain_table, hedging, lakh, oi_marks, opti
 from desk.candles import IST, Candle, local, resample
 from desk.chain import Snapshot, SnapshotStore, parse
 from desk.flow import avg_daily_move, buy_sell, day_levels, divergences, ema, split_volume, vwap
-from desk.fyers import (INDEXES, Fyers, auth_code_from, credentials, data_dir, exchange_code, load_master, login_url,
-                        nearest_contracts, save_token, saved_token, write_env)
+from desk.fyers import (INDEXES, Fyers, auth_code_from, clear_token, credentials, data_dir, exchange_code, load_master,
+                        login_url, nearest_contracts, save_token, saved_token, write_env)
+
+LOGIN_WORDS = ("token", "authenticat", "unauthor", "'code': -8,", "'code': -15,", "'code': -16,", "'code': -17,",
+               "invalid app id")
+
+
+def login_problem(exc: Exception) -> bool:
+    """FYERS refused because the login (token) is no longer valid: the page must ask for a fresh login."""
+    text = str(exc).lower()
+    return any(w in text for w in LOGIN_WORDS)
 from desk.ticks import TickRecorder
 
 WEB = Path(__file__).resolve().parent / "web"
@@ -104,7 +113,8 @@ class DeskService:
 
     # ------------------------------------------------------------------ login
     def try_saved_login(self) -> bool:
-        creds, token = credentials(), saved_token(self.folder)
+        creds = credentials()
+        token = saved_token(self.folder, creds["client_id"])
         if self.client is None and creds["client_id"] and token:
             self.connect(creds["client_id"], token)
         return self.client is not None
@@ -118,6 +128,18 @@ class DeskService:
             self.feed.start()
         self.status = "connected"
         self.note("FYERS connected")
+
+    def logout(self, why: str) -> None:
+        """The FYERS login stopped working (new day, or logged out elsewhere): forget it and show the login box."""
+        self.client = None
+        if self.feed:
+            self.feed.stop()
+            self.feed = None
+        clear_token(self.folder)
+        self.markets.clear()
+        self.status = "please log in to FYERS again"
+        self.note(f"FYERS login no longer valid ({why[:120]}); please log in again")
+        self.broadcast(self.login_info())
 
     def login_info(self) -> dict:
         c = credentials()
@@ -247,8 +269,9 @@ class DeskService:
     def bars(self, index: str) -> dict:
         m = self.market(index)
         v = self.view
-        mins = m.fut_min if v.instrument == "FUT" or not m.idx_min else m.idx_min
-        if v.instrument == "INDEX" and m.fut_min:            # index has no volume: use the futures' (owner rule)
+        use_fut = (v.instrument == "FUT" and bool(m.fut_min)) or not m.idx_min
+        mins = m.fut_min if use_fut else m.idx_min
+        if not use_fut and m.fut_min:            # index has no volume: use the futures' (owner rule)
             fv = {c.ts: c.volume for c in m.fut_min}
             mins = [Candle(c.ts, c.open, c.high, c.low, c.close, fv.get(c.ts, 0.0)) for c in mins]
         bars = resample(mins, v.tf) if v.tf > 1 else [c for c in resample(mins, 1)]
@@ -269,7 +292,7 @@ class DeskService:
         today_bars = [r for c, r in zip(bars, flow["rows"]) if local(c.ts).date() == today]
         bull_day = sum(r["bull"] for r in today_bars)
         bear_day = sum(r["bear"] for r in today_bars)
-        sym = (m.future if v.instrument == "FUT" else INDEXES[index].spot) or INDEXES[index].spot
+        sym = (m.future if use_fut else INDEXES[index].spot) or INDEXES[index].spot
         ce, pe = self.atm_symbols(index)
         opt = {}
         for key, s in (("ce", ce), ("pe", pe)):
@@ -333,6 +356,9 @@ class DeskService:
                         self.refresh_chain(self.view.index)
                     out = [self.bars(self.view.index), self.analytics(self.view.index)]
                 except Exception as exc:
+                    if login_problem(exc):
+                        self.logout(str(exc))
+                        return [self.login_info()]
                     out = [{"type": "result", "op": "view", "ok": False, "msg": f"{exc}"}]
                 self._subscribe()
                 return out
@@ -368,6 +394,10 @@ class DeskService:
                         self.broadcast(self.analytics(idx))
                 self.status = "live"
             except Exception as exc:
+                if login_problem(exc):
+                    with self.lock:
+                        self.logout(str(exc))
+                    continue
                 self.status = f"problem: {str(exc)[:160]}"
                 self.note(self.status)
                 self.broadcast({"type": "status", "status": self.status})

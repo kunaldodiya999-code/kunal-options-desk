@@ -122,12 +122,16 @@
 
 <div id="login" class="overlay"><div class="card loginbox">
   <h2>Log in with FYERS</h2>
-  <div id="appbox"><p>Step 1 (first time): your FYERS app from <b>myapi.fyers.in</b>. Saved in <code>.env</code> on this PC.</p>
+  <div id="appbox"><p>Step 1 (first time only): your FYERS app details from <b>myapi.fyers.in</b> (the same ones the
+    FYERS terminal uses). If the kunal-fyers-terminal folder sits next to this one, they are read from there and this
+    step is skipped. Saved in <code>.env</code> on this PC only.</p>
     <label>App ID <input id="l_id" placeholder="ABCD1234-100"></label>
     <label>Secret ID <input id="l_secret" type="password"></label>
     <label>Redirect URL <input id="l_redirect" value="http://127.0.0.1:8000"></label>
+    <p class="muted small">The Redirect URL must be EXACTLY the one written in your FYERS app.</p>
     <button id="l_save">Save app details</button></div>
-  <div id="loginbox2"><p>Step 2: <a id="l_link" target="_blank" rel="noopener">Open FYERS login</a> (mobile, PIN, OTP).</p>
+  <div id="loginbox2"><p>Step 2 (once a day): <a id="l_link" target="_blank" rel="noopener">Open FYERS login</a> (mobile, PIN, OTP).
+    If you already logged in today in the FYERS terminal, the desk uses that login and this box does not appear.</p>
     <p>Step 3: after login the browser opens your Redirect URL ("site can't be reached" is fine). Copy the WHOLE
       address and paste it here:</p>
     <input id="l_url" placeholder="http://127.0.0.1:8000/?s=ok&code=200&auth_code=...">

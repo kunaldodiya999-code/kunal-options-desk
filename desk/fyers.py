@@ -19,7 +19,11 @@ from zoneinfo import ZoneInfo
 
 from desk.candles import Candle, parse_history
 
-IST = ZoneInfo("Asia/Kolkata")
+try:
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:                          # Windows without the tzdata package: India has no daylight saving
+    from datetime import timedelta, timezone
+    IST = timezone(timedelta(hours=5, minutes=30), "IST")
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 
@@ -65,9 +69,36 @@ def write_env(values: dict, path: Path = ROOT / ".env") -> None:
     path.write_text("".join(f"{k}={v}\n" for k, v in current.items()), encoding="utf-8")
 
 
+# The owner's other programs (same FYERS app): their .env and today's token are reused, so one login a day is enough.
+SIBLINGS = ("kunal-fyers-terminal", "KunalQuant", "kunal-quant-claude-version")
+
+
+def other_folders() -> list[Path]:
+    """Sibling project folders next to this one (or one level higher), e.g. Desktop\\Kunal\\kunal-fyers-terminal."""
+    if os.environ.get("KOD_NO_SHARE"):
+        return []
+    out = []
+    for up in (ROOT.parent, ROOT.parent.parent):
+        for name in SIBLINGS:
+            p = up / name
+            if p.is_dir() and p.resolve() != ROOT and p not in out:
+                out.append(p)
+    return out
+
+
+def _shared_env() -> dict:
+    for folder in other_folders():
+        env = read_env(folder / ".env")
+        if env.get("FYERS_CLIENT_ID") and env.get("FYERS_SECRET_KEY"):
+            return env
+    return {}
+
+
 def credentials() -> dict:
-    env = {**read_env(), **{k: os.environ[k] for k in ("FYERS_CLIENT_ID", "FYERS_SECRET_KEY", "FYERS_REDIRECT_URI")
-                            if os.environ.get(k)}}
+    own = read_env()
+    base = own if own.get("FYERS_CLIENT_ID") else {**_shared_env(), **own}
+    env = {**base, **{k: os.environ[k] for k in ("FYERS_CLIENT_ID", "FYERS_SECRET_KEY", "FYERS_REDIRECT_URI")
+                      if os.environ.get(k)}}
     return {"client_id": env.get("FYERS_CLIENT_ID", ""), "secret_key": env.get("FYERS_SECRET_KEY", ""),
             "redirect_uri": env.get("FYERS_REDIRECT_URI", "http://127.0.0.1:8000")}
 
@@ -112,14 +143,33 @@ def save_token(token: str, folder: Optional[Path] = None) -> None:
                                        encoding="utf-8")
 
 
-def saved_token(folder: Optional[Path] = None) -> Optional[str]:
-    """Today's token (FYERS tokens last one trading day)."""
-    folder = Path(folder or data_dir())
+def _token_in(path: Path) -> Optional[str]:
     try:
-        data = json.loads((folder / "token.json").read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return data.get("token") if data.get("date") == datetime.now(IST).date().isoformat() else None
+
+
+def saved_token(folder: Optional[Path] = None, client_id: str = "") -> Optional[str]:
+    """Today's token (FYERS tokens last one trading day). If this desk has none, today's token of the FYERS terminal
+    is used when it belongs to the same FYERS app (one login a day for both programs)."""
+    own = _token_in(Path(folder or data_dir()) / "token.json")
+    if own or not client_id:
+        return own
+    for other in other_folders():
+        if read_env(other / ".env").get("FYERS_CLIENT_ID") == client_id:
+            token = _token_in(other / "data" / "token.json")
+            if token:
+                return token
+    return None
+
+
+def clear_token(folder: Optional[Path] = None) -> None:
+    try:
+        (Path(folder or data_dir()) / "token.json").unlink()
+    except OSError:
+        pass
 
 
 # ------------------------------------------------------------------ the client

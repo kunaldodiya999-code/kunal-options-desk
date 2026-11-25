@@ -10,7 +10,11 @@ from datetime import datetime, time
 from typing import Iterable, Optional, Sequence
 from zoneinfo import ZoneInfo
 
-IST = ZoneInfo("Asia/Kolkata")
+try:
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:                          # Windows without the tzdata package: India has no daylight saving
+    from datetime import timedelta, timezone
+    IST = timezone(timedelta(hours=5, minutes=30), "IST")
 SESSION_OPEN = time(9, 15)
 SESSION_LAST_MINUTE = time(15, 29)
 
