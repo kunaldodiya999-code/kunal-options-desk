@@ -117,3 +117,29 @@ def test_tick_recorder_appends(tmp_path):
     r.add("NSE:NIFTY26NOVFUT", {"ltp": 25402}, NOW)
     r.flush()
     assert [t["ltp"] for t in read_ticks(tmp_path, "NSE:NIFTY26NOVFUT", "2026-11-17")] == [25400.5, 25401, 25402]
+
+
+def test_chain_labels_short_cov_arrows_week_dex_gex():
+    before = snap(0)
+    # calls 25450..25600: OI down 300 and the forward rises (premium up) -> Short Cov on 4 strikes in a row
+    oi = {(k, "CE"): 1000 + abs(k - 25400) - (300 if 25450 <= k <= 25600 else 0) for k in range(24850, 25951, 50)}
+    now = snap(15, fwd=25430, oi=oi)
+    base = {f"{k:g}|call": 900.0 for k in range(24850, 25951, 50)}
+    table = chain_table(now, before, 8, base)
+    row = {r["strike"]: r for r in table}
+    assert all(row[k]["call"]["label"] == "Short Cov" and row[k]["call"]["arrow"] == "up" for k in (25450, 25500, 25600))
+    assert row[25400]["call"]["arrow"] is None
+    assert all(r["put"]["arrow"] != "down" or r["put"]["label"] == "Short Cov" for r in table)
+    atm = row[25400]["call"]
+    assert atm["week"] == pytest.approx(atm["oi"] - 900) and row[25400]["put"]["week"] is None
+    assert atm["dex"] == pytest.approx(atm["delta"] * atm["oi"])
+    assert atm["gex"] > 0 and row[25400]["put"]["dex"] < 0
+    labels = {r[s]["label"] for r in table for s in ("call", "put")}
+    assert labels <= {"Call Buying", "Call Writing", "Put Buying", "Put Writing", "Short Cov", "Long Unwind", "·"}
+
+
+def test_two_short_cov_strikes_get_no_arrow():
+    before = snap(0)
+    oi = {(k, "CE"): 1000 + abs(k - 25400) - (300 if k in (25500, 25550) else 0) for k in range(24850, 25951, 50)}
+    table = chain_table(snap(15, fwd=25430, oi=oi), before, 8)
+    assert not any(r["call"]["arrow"] for r in table)

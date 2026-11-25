@@ -12,6 +12,13 @@
   (`pip download --platform win_amd64 --python-version 3.14 --only-binary=:all: -r requirements.txt`).
 - FYERS login is shared: `.env` and today's `data/token.json` are read from a sibling kunal-fyers-terminal /
   KunalQuant folder when this desk has none (same client id only). A FYERS login error -> service.logout -> login box.
+- Owner 25 Nov 2026 (chain + chart): readings say Call Buying / Call Writing / Put Buying / Put Writing / Short Cov /
+  Long Unwind; Short Cov on 3+ strikes in a row -> calls green UP arrow, puts red DOWN arrow (analytics.chain_table).
+  Chain columns per side: OI, Week (OI vs the close of expiry-7 days, FYERS daily candles with oi_flag, saved in
+  data/week), Day, 15 min, Reading, DEX (delta x OI lots), GEX (gamma x OI x lot x price^2 x 1%), bars in every one,
+  all bars right-anchored on BOTH sides. Trapped / heaviest hedging = dots on the chart (hover) + side panel
+  "Trapped and key levels", never long labels. Main chart default = SPOT (futures volume); tick-boxes add near /
+  next future lines. FYERS Standard plan = 5 requests/s (error -360): every REST call goes through fyers.paced (~4/s).
 - Tests: `python -m pytest tests -q` (tests/conftest.py points KOD_DATA at a temp folder). Demo: `run.py --demo`.
 - Owner request 20 Nov 2026: single page like the "options desk" video (17 Nov) + ODX-style studies. FYERS primary,
   Dhan later. Light/dark TradingView-style chart. OI profile with two tick-boxes: Total (live) OI, OI change today.

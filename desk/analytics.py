@@ -70,19 +70,49 @@ def summary(snap: Snapshot, now: datetime) -> dict:
 
 
 # ------------------------------------------------------------------ option chain table
-def chain_table(snap: Snapshot, before15: Optional[Snapshot], each_side: int) -> list[dict]:
+LABELS = {("call", "buying"): "Call Buying", ("call", "writing"): "Call Writing", ("call", "covering"): "Short Cov",
+          ("call", "unwinding"): "Long Unwind", ("put", "buying"): "Put Buying", ("put", "writing"): "Put Writing",
+          ("put", "covering"): "Short Cov", ("put", "unwinding"): "Long Unwind"}
+RUN = 3        # owner: 3 or more strikes in a row showing Short Cov -> arrow on each of them
+
+
+def chain_table(snap: Snapshot, before15: Optional[Snapshot], each_side: int,
+                week_base: Optional[dict] = None) -> list[dict]:
+    """One row per strike near ATM. Per side: OI, Week (vs the previous expiry's close), Day, 15 min, reading
+    (Call Buying / Call Writing / Short Cov / Long Unwind ...), DEX, GEX, IV, delta, theta, price.
+
+    DEX = delta x OI (lots of the index the open options amount to; puts negative).
+    GEX = gamma x OI x lot x price^2 x 1% (rupees of index the hedgers trade for a 1% move).
+    Short Cov on 3+ strikes in a row: calls -> arrow UP (call writers buying back, bullish), puts -> arrow DOWN."""
     ch15 = changes(snap, before15) if before15 else {}
+    price = snap.forward or snap.spot or 0.0
     out = []
     for r in near(snap, each_side):
         row = {"strike": r.strike, "atm": r.strike == snap.atm}
         for side in ("call", "put"):
             leg = getattr(r, side)
             c = ch15.get((r.strike, side), {})
-            row[side] = {"oi": leg.oi, "day": leg.oi_change, "m15": c.get("oi") if before15 else None,
-                         "reading": c.get("reading", "·"), "iv": leg.iv, "delta": leg.delta, "theta": leg.theta,
-                         "gamma": leg.gamma, "vega": leg.vega, "price": leg.ltp, "symbol": leg.symbol,
-                         "premium15": c.get("premium")}
+            rd = c.get("reading", "·")
+            base = (week_base or {}).get(f"{r.strike:g}|{side}")
+            row[side] = {"oi": leg.oi, "week": (leg.oi - base) if base is not None else None, "day": leg.oi_change,
+                         "m15": c.get("oi") if before15 else None, "reading": rd,
+                         "label": LABELS.get((side, rd), "·"), "arrow": None,
+                         "dex": (leg.delta * leg.oi) if leg.delta is not None else None,
+                         "gex": (leg.gamma * leg.oi * snap.lot_size * price * price * 0.01)
+                         if leg.gamma is not None and price else None,
+                         "iv": leg.iv, "delta": leg.delta, "theta": leg.theta, "gamma": leg.gamma, "vega": leg.vega,
+                         "price": leg.ltp, "symbol": leg.symbol, "premium15": c.get("premium")}
         out.append(row)
+    for side, arrow in (("call", "up"), ("put", "down")):
+        i = 0
+        while i < len(out):
+            j = i
+            while j < len(out) and out[j][side]["reading"] == "covering":
+                j += 1
+            if j - i >= RUN:
+                for k in range(i, j):
+                    out[k][side]["arrow"] = arrow
+            i = max(j, i + 1)
     return out
 
 

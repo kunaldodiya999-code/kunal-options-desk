@@ -8,6 +8,8 @@ Secrets stay on the PC: ``.env`` (FYERS_CLIENT_ID, FYERS_SECRET_KEY, FYERS_REDIR
 from __future__ import annotations
 
 import json
+import threading
+import time as _time
 import os
 import urllib.request
 from dataclasses import dataclass
@@ -173,6 +175,27 @@ def clear_token(folder: Optional[Path] = None) -> None:
 
 
 # ------------------------------------------------------------------ the client
+class _Pace:
+    """FYERS Standard plan: at most 5 requests a second (error -360 above that). Every REST call of this program
+    waits its turn here, so the desk stays at about 4 a second whatever else is running."""
+    gap = 0.26
+    lock = threading.Lock()
+    last = 0.0
+
+    @classmethod
+    def wait(cls) -> None:
+        with cls.lock:
+            now = _time.monotonic()
+            if now - cls.last < cls.gap:
+                _time.sleep(cls.gap - (now - cls.last))
+            cls.last = _time.monotonic()
+
+
+def paced(fn, *args, **kwargs):
+    _Pace.wait()
+    return fn(*args, **kwargs)
+
+
 class Fyers:
     def __init__(self, client_id: str, token: str, model: Any = None) -> None:
         if model is None:
@@ -189,12 +212,12 @@ class Fyers:
         return response
 
     def profile(self) -> dict:
-        return self._ok(self.model.get_profile(), "profile").get("data", {})
+        return self._ok(paced(self.model.get_profile), "profile").get("data", {})
 
     fund_rows: list = []
 
     def available_funds(self) -> float:
-        rows = self._ok(self.model.funds(), "funds").get("fund_limit") or []
+        rows = self._ok(paced(self.model.funds), "funds").get("fund_limit") or []
         self.fund_rows = [{"title": r.get("title"), "equity": r.get("equityAmount"),
                            "commodity": r.get("commodityAmount")} for r in rows]
         for row in rows:
@@ -207,7 +230,7 @@ class Fyers:
         out: dict[str, dict] = {}
         symbols = [s for s in dict.fromkeys(symbols) if s]
         for i in range(0, len(symbols), 50):
-            response = self._ok(self.model.quotes(data={"symbols": ",".join(symbols[i:i + 50])}), "quotes")
+            response = self._ok(paced(self.model.quotes, data={"symbols": ",".join(symbols[i:i + 50])}), "quotes")
             for row in response.get("d") or []:
                 v = row.get("v") or {}
                 if isinstance(v, dict) and v.get("lp") is not None:
@@ -217,21 +240,34 @@ class Fyers:
 
     def minutes(self, symbol: str, start: date, end: date) -> list[Candle]:
         """1-minute candles from ``start`` to ``end`` (FYERS: up to 100 days a request)."""
-        response = self.model.history(data={"symbol": symbol, "resolution": "1", "date_format": "1",
+        response = paced(self.model.history, data={"symbol": symbol, "resolution": "1", "date_format": "1",
                                             "range_from": start.isoformat(), "range_to": end.isoformat(),
                                             "cont_flag": "1"})
         return parse_history(response)
 
     def history(self, symbol: str, resolution: str, start: date, end: date) -> list[Candle]:
         """Candles of any FYERS resolution ("1", "5", "D" ...)."""
-        return parse_history(self.model.history(data={
+        return parse_history(paced(self.model.history, data={
             "symbol": symbol, "resolution": resolution, "date_format": "1", "range_from": start.isoformat(),
             "range_to": end.isoformat(), "cont_flag": "1"}))
 
     def option_chain(self, symbol: str, strikes: int = 15) -> dict:
         """Raw FYERS option chain (nearest expiry): strikes each side of ATM, with OI and OI change."""
-        return self._ok(self.model.optionchain(data={"symbol": symbol, "strikecount": int(strikes), "timestamp": ""}),
-                        "option chain")
+        return self._ok(paced(self.model.optionchain,
+                              data={"symbol": symbol, "strikecount": int(strikes), "timestamp": ""}), "option chain")
+
+    def daily_oi(self, symbol: str, start: date, end: date) -> list[tuple[date, float]]:
+        """(day, open interest at that day's close) from FYERS daily candles with oi_flag (quantity, not lots)."""
+        response = paced(self.model.history, data={"symbol": symbol, "resolution": "D", "date_format": "1",
+                                                  "range_from": start.isoformat(), "range_to": end.isoformat(),
+                                                  "cont_flag": "1", "oi_flag": "1"})
+        if not isinstance(response, dict) or response.get("s") not in ("ok", "no_data"):
+            raise ValueError(f"FYERS daily OI failed: {response!r}"[:300])
+        out = []
+        for row in response.get("candles") or []:
+            if len(row) > 6 and row[6] is not None:
+                out.append((datetime.fromtimestamp(int(row[0]), IST).date(), float(row[6])))
+        return sorted(out)
 
 
 # ------------------------------------------------------------------ contract list (public, once a day)
@@ -266,6 +302,7 @@ class Contracts:
     calls: dict             # strike -> symbol
     puts: dict
     future: Optional[str]   # nearest futures contract (its volume feeds VWAP: the index has none)
+    next_future: Optional[str] = None   # the month after (owner: near and / or next future on the spot chart)
 
 
 def nearest_contracts(master: dict, underlying: str, today: date) -> Contracts:
@@ -295,7 +332,8 @@ def nearest_contracts(master: dict, underlying: str, today: date) -> Contracts:
     lots = sorted({r[3] for r in rows if r[3]})
     return Contracts(expiry, lots[0] if lots else 1, step,
                      {r[0]: r[2] for r in rows if r[1] == "CE"}, {r[0]: r[2] for r in rows if r[1] == "PE"},
-                     min(futures)[1] if futures else None)
+                     min(futures)[1] if futures else None,
+                     sorted(futures)[1][1] if len(futures) > 1 else None)
 
 
 def chain_strikes(c: Contracts, spot: float, width: int) -> list[float]:

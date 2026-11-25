@@ -8,7 +8,7 @@
   <b class="brand">KUNAL OPTIONS DESK</b>
   <select id="index"><option value="NIFTY">NIFTY</option><option value="BANKNIFTY">BANK NIFTY</option><option value="SENSEX">SENSEX</option></select>
   <select id="tf"><option value="1">1 min</option><option value="3">3 min</option><option value="5" selected>5 min</option><option value="15">15 min</option></select>
-  <select id="instrument"><option value="FUT">Future</option><option value="INDEX">Index (futures volume)</option></select>
+  <select id="instrument"><option value="INDEX">Spot (futures volume)</option><option value="FUT">Near future</option></select>
   <select id="broker" title="Data and orders come from this broker"><option value="FYERS">FYERS (live)</option><option value="DHAN" disabled>Dhan (coming later)</option></select>
   <label class="chk"><input type="checkbox" id="opt_panel" checked> Options panel</label>
   <span class="sp"></span>
@@ -29,7 +29,9 @@
       <label><input type="checkbox" data-t="first30"> First 30 min range</label>
       <label><input type="checkbox" data-t="bbvwap"> Bulls' and bears' VWAP</label>
       <label><input type="checkbox" data-t="ema1"> EMA 1</label>
-      <label><input type="checkbox" data-t="ema2"> EMA 2</label></div>
+      <label><input type="checkbox" data-t="ema2"> EMA 2</label>
+      <label><input type="checkbox" data-t="near_line"> Near future line</label>
+      <label><input type="checkbox" data-t="next_line"> Next future line</label></div>
     <div class="trow"><span class="tlabel">OPTIONS</span>
       <label><input type="checkbox" data-t="oiwalls" checked> OI walls</label>
       <label><input type="checkbox" data-t="oi_total" checked> OI profile: Total (live) OI</label>
@@ -76,9 +78,11 @@
     <div id="strip_summary" class="kpis"></div>
     <div class="chart oichart" id="oichart"></div>
     <div id="chainwrap"><table id="chain"></table></div>
-    <p class="muted small" id="chainnote">Reading (last 15 minutes): <b class="buying">buying</b> = OI up, premium up ·
-      <b class="writing">writing</b> = OI up, premium down · <b class="covering">covering</b> = OI down, premium up ·
-      <b class="unwinding">unwinding</b> = OI down, premium down. It is inferred from price and OI; who traded is not known.
+    <p class="muted small" id="chainnote">Reading (last 15 minutes): <b class="buying">Call / Put Buying</b> = OI up, premium up ·
+      <b class="writing">Call / Put Writing</b> = OI up, premium down · <b class="sc">Short Cov</b> = OI down, premium up
+      (writers buying back; 3+ strikes in a row: calls <b class="pos">▲</b>, puts <b class="neg">▼</b>) ·
+      <b class="unwinding">Long Unwind</b> = OI down, premium down. Week = OI change since the previous expiry's close.
+      DEX = delta x OI (lots). GEX = rupees hedged for a 1% move. It is inferred from price and OI; who traded is not known.
       Greeks are calculated here from the live option prices (Black-76). Hover a delta for gamma and vega. The 15-minute
       columns fill in once the desk has been running that long.</p>
   </section>
@@ -107,6 +111,8 @@
 
 <aside id="right">
   <section class="card"><div class="head"><b>LIVE PRICES</b></div><div id="live" class="kv"></div></section>
+  <section class="card"><div class="head"><b>TRAPPED AND KEY LEVELS</b></div><div id="levels" class="small"></div>
+    <p class="muted small">On the chart: ● trapped, ◆ heaviest hedging. Hover a dot for details.</p></section>
   <section class="card"><details><summary><b>INDICATOR SETTINGS</b></summary>
     <div class="kv form">
       <label>EMA 1 length <input type="number" id="s_ema1" min="1" value="9"></label>

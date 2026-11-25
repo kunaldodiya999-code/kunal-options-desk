@@ -9,7 +9,15 @@ from __future__ import annotations
 
 import threading
 import time as _time
+from datetime import datetime, time as _clock
 from typing import Any, Callable, Iterable, Optional
+
+from desk.candles import IST
+
+
+def market_open(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.now(IST)
+    return now.weekday() < 5 and _clock(9, 14) <= now.time() <= _clock(15, 31)
 
 
 class Feed:
@@ -40,7 +48,7 @@ class Feed:
             self.ws = data_ws.FyersDataSocket(access_token=f"{self.client_id}:{self.token}", log_path=self.log_path,
                                               litemode=False, write_to_file=False, reconnect=True,
                                               on_connect=self._on_connect, on_close=self._on_close,
-                                              on_error=lambda m: self.log(f"price feed error: {m}"),
+                                              on_error=lambda m: self.log(f"price feed dropped, reconnecting: {m}"),
                                               on_message=self._on_message)
             self.ws.connect()
         except Exception as exc:
@@ -102,6 +110,8 @@ class Feed:
     def _safety_net(self) -> None:
         while not self._stop.is_set():
             _time.sleep(1.0)
+            if not market_open():              # no ticks come when the market is shut: nothing to back up
+                continue
             now = _time.monotonic()
             with self._lock:
                 stale = [s for s in self.symbols if now - self.last_tick.get(s, 0) > 3.0]
@@ -111,7 +121,9 @@ class Feed:
                 for sym, q in self.client.quotes(stale).items():
                     self.on_quote_cb(sym, {**q, "src": "rest", "rx": _time.time()})
             except Exception as exc:
-                self.log(f"REST quotes failed: {str(exc)[:120]}")
+                if now - getattr(self, "_last_rest_log", -1e9) > 60:        # once a minute is enough on the screen
+                    self._last_rest_log = now
+                    self.log(f"backup price check failed (the live feed covers it when connected): {str(exc)[:100]}")
 
     def stop(self) -> None:
         self._stop.set()

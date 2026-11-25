@@ -16,6 +16,7 @@ from desk.candles import IST, Candle
 STEP = 50.0
 LOT = 65
 FUT = "NSE:NIFTY26NOVFUT"
+NEXT = "NSE:NIFTY26DECFUT"
 
 
 def _last_weekday() -> date:
@@ -73,6 +74,8 @@ class DemoFyers:
                         o, c = self._opt(o, k, symbol.endswith("CE"), ts), self._opt(c, k, symbol.endswith("CE"), ts)
                     elif symbol.endswith("INDEX"):
                         o, c = o - 20, c - 20
+                    elif symbol == NEXT:
+                        o, c = o + 140, c + 140
                     hi, lo = max(o, c) * 1.0004, min(o, c) * 0.9996
                     vol = 0 if symbol.endswith("INDEX") else 4000 + (ts // 60 % 13) * 900
                     out.append(Candle(ts, o, hi, lo, c, vol))
@@ -83,6 +86,17 @@ class DemoFyers:
         exp = datetime.combine(self.clock.day, datetime.min.time(), IST).replace(hour=15, minute=30)
         years = max(60.0, exp.timestamp() - ts) / (365 * 86400)
         return round(price(fwd, k, years, 0.13, call), 2)
+
+    def daily_oi(self, symbol: str, start: date, end: date) -> list:
+        """Pretend OI at each day's close: 60% of today's level a week ago (quantity, like FYERS)."""
+        k = float(symbol[-7:-2])
+        base = 3000 + 40 * abs(k - self.base) / STEP
+        out, d = [], start
+        while d <= end:
+            if d.weekday() < 5:
+                out.append((d, base * LOT))
+            d += timedelta(days=1)
+        return out
 
     def option_chain(self, symbol: str, strikes: int = 15) -> dict:
         now = self.clock()
@@ -113,7 +127,8 @@ def demo_master(clock: DemoClock):
     fut_exp = int(datetime.combine(clock.day + timedelta(days=10), datetime.min.time(), IST).timestamp())
 
     def loader(name: str, today: date) -> dict:
-        m = {FUT: {"underSym": "NIFTY", "expiryDate": fut_exp, "symTicker": FUT}}
+        m = {FUT: {"underSym": "NIFTY", "expiryDate": fut_exp, "symTicker": FUT},
+             NEXT: {"underSym": "NIFTY", "expiryDate": fut_exp + 35 * 86400, "symTicker": NEXT}}
         for k in range(23000, 28001, 50):
             for t in ("CE", "PE"):
                 s = f"NSE:NIFTY26N17{k}{t}"

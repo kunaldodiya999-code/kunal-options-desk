@@ -26,8 +26,8 @@
     cb.onchange = () => { toggles[cb.dataset.t] = cb.checked; store.set("toggles", toggles); applyToggles(); };
   });
   const T = k => { const el = document.querySelector(`[data-t="${k}"]`); return el ? el.checked : false; };
-  const view = Object.assign({ index: "NIFTY", tf: 5, instrument: "FUT", each_side: 8, ema1: 9, ema2: 21, strike: null },
-    store.get("view", {}));
+  const view = Object.assign({ index: "NIFTY", tf: 5, instrument: "INDEX", each_side: 8, ema1: 9, ema2: 21, strike: null },
+    store.get("view2", {}));
   $("index").value = view.index; $("tf").value = String(view.tf); $("instrument").value = view.instrument;
   $("each").value = String(view.each_side); $("s_ema1").value = view.ema1; $("s_ema2").value = view.ema2;
   const prefs = Object.assign({ pw: 160, pv: true, align: false, explainer: true, greeks: true, opt: true }, store.get("prefs", {}));
@@ -54,6 +54,9 @@
   main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   const vwapS = line(main, "#2962ff"), bvwS = line(main, "#089981", 1, 2), svwS = line(main, "#f23645", 1, 2);
   const ema1S = line(main, "#ff9800", 1), ema2S = line(main, "#9c27b0", 1);
+  const futLine = color => main.addLineSeries({ color, lineWidth: 2, lastValueVisible: true, priceLineVisible: false,
+    crosshairMarkerVisible: false });
+  const nearS = futLine("#ff6d00"), nextS = futLine("#00acc1");
 
   const flowC = mk($("flow"));
   const netS = flowC.addHistogramSeries({ lastValueVisible: false, priceLineVisible: false });
@@ -104,6 +107,9 @@
     svwS.setData(T("bbvwap") ? series(d.bear_vwap, times) : []);
     ema1S.setData(T("ema1") ? series(d.ema1, times) : []);
     ema2S.setData(T("ema2") ? series(d.ema2, times) : []);
+    const fl = f => f && f.line ? f.line.map(([t, c]) => ({ time: t + SHIFT, value: c })) : [];
+    nearS.setData(T("near_line") ? fl(d.near) : []);
+    nextS.setData(T("next_line") ? fl(d.next) : []);
     netS.setData(d.flow_rows.map((r, i) => ({ time: times[i], value: r.net, color: r.net >= 0 ? "rgba(8,153,129,.6)" : "rgba(242,54,69,.6)" })));
     cumS.setData(d.flow_rows.map((r, i) => ({ time: times[i], value: r.cum })));
     avgS.setData(T("adaptive") ? series(d.flow_rows.map(r => r.avg), times) : []);
@@ -125,7 +131,9 @@
     if (!B || !B.bars.length) return;
     const i = t ? B.bars.findIndex(b => b.t + SHIFT === t) : B.bars.length - 1, b = B.bars[i < 0 ? B.bars.length - 1 : i];
     const tot = (b.bv + b.sv) || 1, day = (B.bull_day + B.bear_day) || 1;
-    $("legend").innerHTML = `<b>${esc(B.symbol)} · ${B.tf} min</b><br>O ${fmt(b.o)} H ${fmt(b.h)} L ${fmt(b.l)} C ${fmt(b.c)} · Vol ${lk(b.v)}` +
+    const fut = (key, f, color) => T(key) && f && f.symbol && f.line.length ?
+      ` · <span style="color:${color}">${esc(f.symbol)} ${fmt(f.line[f.line.length - 1][1])}</span>` : "";
+    $("legend").innerHTML = `<b>${esc(B.symbol)} · ${B.tf} min</b>${fut("near_line", B.near, "#ff6d00")}${fut("next_line", B.next, "#00acc1")}<br>O ${fmt(b.o)} H ${fmt(b.h)} L ${fmt(b.l)} C ${fmt(b.c)} · Vol ${lk(b.v)}` +
       (T("bullbear") ? ` (<span class="g">bull ${lk(b.bv)} ${Math.round(b.bv / tot * 100)}%</span> · <span class="r">bear ${lk(b.sv)} ${Math.round(b.sv / tot * 100)}%</span>)` : "") +
       (T("vwap") ? `<br><span class="b">VWAP ${fmt(B.vwap[i < 0 ? B.vwap.length - 1 : i])}</span>` : "") +
       (T("bullbear") ? `<br>Today so far: <span class="g">bull volume ${lk(B.bull_day)} (${Math.round(B.bull_day / day * 100)}%)</span> · <span class="r">bear volume ${lk(B.bear_day)} (${Math.round(B.bear_day / day * 100)}%)</span>` : "");
@@ -150,14 +158,13 @@
     }
     if (A && !A.empty) for (const l of A.levels) {
       if ((l.kind === "call_wall" || l.kind === "put_wall") && !T("oiwalls")) continue;
-      if (l.kind === "hedging" && !T("hedging")) continue;
-      if (l.kind === "trapped" && !T("trapped")) continue;
+      if (l.kind === "hedging" || l.kind === "trapped") continue;      // shown as dots (hover) + side panel
       add(l.price + shift(), { call_wall: "#f23645", put_wall: "#089981", hedging: "#7b1fa2", trapped: "#9c27b0" }[l.kind], l.title);
     }
   }
 
   // marks on the chart + hover text
-  let markIndex = {};
+  let markIndex = {}, dotHits = [];
   function marks() {
     if (!B) return;
     const out = [], idx = {};
@@ -183,7 +190,8 @@
   main.subscribeCrosshairMove(p => {
     const tip = $("tip");
     legend(p && p.time);
-    const texts = p && p.time && markIndex[p.time];
+    const hit = p && p.point && dotHits.find(d => Math.abs(d.x - p.point.x) <= 8 && Math.abs(d.y - p.point.y) <= 8);
+    const texts = hit ? [hit.text] : p && p.time && markIndex[p.time];
     if (!texts || !p.point) { tip.style.display = "none"; return; }
     tip.innerHTML = texts.map(esc).join("<br><br>");
     tip.style.display = "block";
@@ -216,8 +224,26 @@
     cv.style.top = el.offsetTop + "px"; cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px";
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     const showT = T("oi_total"), showC = T("oi_change");
-    if (!A || A.empty || !A.profile.length || (!showT && !showC)) return;
+    dotHits = [];
+    if (!A || A.empty) return;
     const right = w - main.priceScale("right").width() - 4, pw = Number(prefs.pw) || 160, gap = 10;
+    const dotX = (showT && showC ? right - pw - gap - pw * 0.75 : showT || showC ? right - pw : right) - 12;
+    const dot = (price, color, text, diamond) => {
+      const y = candles.priceToCoordinate(price + shift());
+      if (y === null || y < 4 || y > h - 4) return;
+      const same = dotHits.filter(d => Math.abs(d.y - y) < 2).length, x = dotX - same * 13;
+      ctx.fillStyle = color; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.beginPath();
+      if (diamond) { ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath(); }
+      else ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      dotHits.push({ x, y, text });
+    };
+    if (T("trapped")) for (const r of A.trapped.rows.slice(0, 6))
+      dot(r.strike, r.option === "CALL" || /call/i.test(r.option) ? "#e040fb" : "#ab47bc",
+        `TRAPPED ${r.option.toUpperCase()} ${r.who.toUpperCase()} at ${fmt(r.strike, 0)}: ${fmt(r.lots, 0)} lots built at about ${fmt(r.built_at)}, now ${fmt(r.now)}, ${Math.round(r.under_water * 100)}% under water (about ₹${lk(r.money)}).`);
+    if (T("hedging") && A.hedging.heaviest) dot(A.hedging.heaviest, "#7b1fa2",
+      `HEAVIEST HEDGING at ${fmt(A.hedging.heaviest, 0)}: a 50-point rise makes option writers buy about ${lk(A.hedging.buy_on_rise)} lots; a fall makes them sell about ${lk(A.hedging.sell_on_fall)}.`, true);
+    if (!A.profile.length || (!showT && !showC)) return;
     const ys = A.profile.map(p => candles.priceToCoordinate(p.strike + shift()));
     const vis = A.profile.map((p, i) => [p, ys[i]]).filter(([p, y]) => y !== null && y > 0 && y < h);
     if (!vis.length) return;
@@ -285,10 +311,17 @@
     $("hedgetable").innerHTML = `<tr><th>STRIKE</th><th>LOTS HEDGED PER 50-POINT MOVE</th><th>SHARE OF THE HEAVIEST</th></tr>` +
       hg.rows.filter(r => r.share >= 0.02).map(r => `<tr><td>${fmt(r.strike, 0)}</td><td><span class="hbar" style="width:${Math.round(r.share * 300)}px"></span>${fmt(r.lots, 0)}</td><td>${Math.round(r.share * 100)}%</td></tr>`).join("");
     if (d.log) $("log").textContent = d.log.join("\n");
+    const sw = d.summary, lv = [];
+    if (sw.call_wall) lv.push(`<div class="lvl"><b class="neg">Call wall ${fmt(sw.call_wall, 0)}</b><span>${lk(sw.call_wall_oi)} lots open</span></div>`);
+    if (sw.put_wall) lv.push(`<div class="lvl"><b class="pos">Put wall ${fmt(sw.put_wall, 0)}</b><span>${lk(sw.put_wall_oi)} lots open</span></div>`);
+    if (d.hedging.heaviest) lv.push(`<div class="lvl"><b class="hedge">◆ Heaviest hedging ${fmt(d.hedging.heaviest, 0)}</b><span>${lk(d.hedging.buy_on_rise)} lots bought per 50-pt rise</span></div>`);
+    d.trapped.rows.slice(0, 6).forEach(r => lv.push(`<div class="lvl"><b class="trap">● Trapped ${esc(r.option.toLowerCase())} ${esc(r.who)} ${fmt(r.strike, 0)}</b>` +
+      `<span>${fmt(r.lots, 0)} lots · ${Math.round(r.under_water * 100)}% down · built ${fmt(r.built_at)}, now ${fmt(r.now)}</span></div>`));
+    $("levels").innerHTML = lv.join("") || `<span class="muted">Nothing yet.</span>`;
     const L = d.live;
-    $("live").innerHTML = `<span>${esc(L.future || "Future")}</span><span class="big" id="lv_fut">${fmt(lastCandle ? lastCandle.c : null)}</span>` +
+    $("live").innerHTML = `<span>${esc((B && B.symbol) || L.future || "Chart")}</span><span class="big" id="lv_fut">${fmt(lastCandle ? lastCandle.c : null)}</span>` +
       `<span>ATM strike</span><b>${fmt(L.atm, 0)}</b><span>${esc(L.ce || "ATM call")}</span><b id="lv_ce">${fmt(L.ce_ltp)}</b>` +
-      `<span>${esc(L.pe || "ATM put")}</span><b id="lv_pe">${fmt(L.pe_ltp)}</b><span>Index</span><b id="lv_spot">${fmt(L.spot)}</b>` +
+      `<span>${esc(L.pe || "ATM put")}</span><b id="lv_pe">${fmt(L.pe_ltp)}</b><span>Index</span><b id="lv_spot">${fmt(L.spot)}</b><span>${esc(L.future || "Near future")}</span><b id="lv_near">${fmt(B && B.near && B.near.line.length ? B.near.line[B.near.line.length - 1][1] : null)}</b>` +
       `<span>Price implied by options</span><b>${fmt(L.forward)}</b><span>Lot size</span><b>${d.lot}</b><span>Expiry</span><b>${esc(d.expiry || "-")}</b>`;
     const sel = $("strike"), cur = sel.value;
     sel.innerHTML = `<option value="">ATM (follows the price)</option>` + d.chain.map(r => `<option value="${r.strike}">${fmt(r.strike, 0)}</option>`).join("");
@@ -296,22 +329,36 @@
     priceLines(); marks(); drawProfile(); applyToggles(true);
   }
   function renderChain(d) {
-    const g = prefs.greeks;
-    const maxOi = Math.max(...d.chain.map(r => Math.max(r.call.oi, r.put.oi)), 1);
+    const g = prefs.greeks, rows = d.chain;
+    const mx = k => Math.max(...rows.map(r => Math.max(Math.abs(r.call[k] || 0), Math.abs(r.put[k] || 0))), 1e-9);
+    const M = { oi: mx("oi"), week: mx("week"), day: mx("day"), m15: mx("m15"), dex: mx("dex"), gex: mx("gex") };
+    const SIDE = { call: "rgba(242,54,69,.55)", put: "rgba(8,153,129,.55)" }, GREY = "rgba(120,123,134,.55)";
+    // every bar starts at the right edge of its cell and grows left, on both sides (owner 25 Nov)
+    const bc = (v, k, color, text, cls, title) => v === null || v === undefined ? `<td class="bc">·</td>` :
+      `<td class="bc" ${title ? `title="${esc(title)}"` : ""}><i style="width:${Math.round(Math.abs(v) / M[k] * 100)}%;background:${color}"></i><span class="${cls || ""}">${text}</span></td>`;
+    const chg = (x, k, side, title) => bc(x[k], k, (x[k] || 0) >= 0 ? SIDE[side] : GREY, sg(x[k]), (x[k] || 0) >= 0 ? "pos" : "neg", title);
     const leg = (x, side) => {
-      const oi = `<td class="oi ${side === "call" ? "oic" : "oip"}"><i style="width:${Math.round(x.oi / maxOi * 100)}%"></i><span>${lk(x.oi)}</span></td>`;
-      const cells = [`<td class="${x.day >= 0 ? "pos" : "neg"}">${sg(x.day)}</td>`,
-        `<td class="${(x.m15 || 0) >= 0 ? "pos" : "neg"}" title="premium over 15 min ${fmt(x.premium15)}">${x.m15 === null ? "·" : sg(x.m15)}</td>`,
-        `<td class="${x.reading}">${x.reading}</td>`];
+      const arrow = x.arrow === "up" ? ` <b class="arw up" title="3 or more strikes in a row: call writers buying back">▲</b>` :
+        x.arrow === "down" ? ` <b class="arw down" title="3 or more strikes in a row: put writers buying back">▼</b>` : "";
+      const read = `<td class="rd"><span class="${x.reading === "covering" ? "sc" : x.reading}">${esc(x.label)}</span>${arrow}</td>`;
+      const cells = [bc(x.oi, "oi", SIDE[side], lk(x.oi)),
+        chg(x, "week", side, d.week_from ? `OI change since the close of ${d.week_from} (start of this series)` : ""),
+        chg(x, "day", side), chg(x, "m15", side, x.premium15 === null || x.premium15 === undefined ? "" : `premium over 15 min ${fmt(x.premium15)}`),
+        read,
+        bc(x.dex, "dex", "rgba(41,98,255,.45)", sg(x.dex), "", "DEX: delta x open interest (lots of index)"),
+        bc(x.gex, "gex", "rgba(156,39,176,.45)", lk(x.gex), "", "GEX: rupees of index the hedgers trade for a 1% move")];
       const gk = g ? [`<td>${x.iv ? fmt(x.iv * 100, 1) : "-"}</td>`, `<td title="gamma ${x.gamma ? x.gamma.toFixed(5) : "-"} · vega ${fmt(x.vega)}">${fmt(x.delta)}</td>`, `<td>${fmt(x.theta, 1)}</td>`] : [];
       const price = `<td><b>${fmt(x.price)}</b></td>`;
-      return side === "call" ? [oi, ...cells, ...gk, price].join("") : [price, ...gk.slice().reverse(), ...cells.slice().reverse(), oi].join("");
+      return side === "call" ? [...cells, ...gk, price].join("") : [price, ...gk.slice().reverse(), ...cells.slice().reverse()].join("");
     };
-    const gh = g ? ["IV", "Delta", "Theta"] : [];
-    const head = ["OI", "Day", "15 min", "Reading", ...gh, "Price"];
+    const head = ["OI", "Week", "Day", "15 min", "Reading", "DEX", "GEX", ...(g ? ["IV", "Delta", "Theta"] : []), "Price"];
+    const tip = { Week: "OI change since the start of this weekly series", Day: "OI change today", "15 min": "OI change in the last 15 minutes",
+      Reading: "Last 15 minutes. Short Cov = OI down, premium up (writers buying back). Arrow = 3+ strikes in a row",
+      DEX: "Delta x OI, in lots of the index", GEX: "Gamma exposure: rupees hedged for a 1% move" };
+    const th = h => `<th title="${esc(tip[h] || "")}">${h}</th>`;
     $("chain").innerHTML = `<tr><th colspan="${head.length}" style="text-align:center">CALLS</th><th></th><th colspan="${head.length}" style="text-align:center">PUTS</th></tr>` +
-      `<tr>${head.map(h => `<th>${h}</th>`).join("")}<th style="text-align:center">Strike</th>${head.slice().reverse().map(h => `<th>${h}</th>`).join("")}</tr>` +
-      d.chain.map(r => `<tr class="${r.atm ? "atm" : ""}">${leg(r.call, "call")}<td class="k">${fmt(r.strike, 0)}</td>${leg(r.put, "put")}</tr>`).join("");
+      `<tr>${head.map(th).join("")}<th style="text-align:center">Strike</th>${head.slice().reverse().map(th).join("")}</tr>` +
+      rows.map(r => `<tr class="${r.atm ? "atm" : ""}">${leg(r.call, "call")}<td class="k">${fmt(r.strike, 0)}</td>${leg(r.put, "put")}</tr>`).join("");
   }
 
   function applyToggles(noRender) {
@@ -335,6 +382,7 @@
       candles.update({ time: lc.t + SHIFT, open: lc.o, high: lc.h, low: lc.l, close: lc.c });
       const el = $("lv_fut"); if (el) el.textContent = fmt(m.ltp);
     }
+    if (A && !A.empty && m.symbol === A.live.future) { const el = $("lv_near"); if (el) el.textContent = fmt(m.ltp); }
     if (A && !A.empty) {
       if (m.symbol === A.live.ce) { const el = $("lv_ce"); if (el) el.textContent = fmt(m.ltp); }
       if (m.symbol === A.live.pe) { const el = $("lv_pe"); if (el) el.textContent = fmt(m.ltp); }
@@ -343,7 +391,7 @@
 
   // ------------------------------------------------------------------ link to the desk program
   const send = m => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
-  const sendView = () => { store.set("view", view); send(Object.assign({ op: "view" }, view)); };
+  const sendView = () => { store.set("view2", view); send(Object.assign({ op: "view" }, view)); };
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws?k=${encodeURIComponent(window.DESK_KEY)}`);
     ws.onopen = () => { $("status").textContent = "connected"; send({ op: "login_info" }); };

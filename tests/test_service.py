@@ -48,3 +48,14 @@ def test_view_sends_bars_and_analytics(svc):
     assert ana["type"] == "analytics" and not ana.get("empty")
     assert ana["profile"] and {"call_oi", "put_oi", "call_ch", "put_ch"} <= set(ana["profile"][0])
     assert ana["chain"] and ana["summary"]["atm"] is not None and ana["live"]["ce"]
+
+
+def test_week_column_and_future_lines(svc):
+    svc.handle({"op": "view", "index": "NIFTY", "tf": 5})
+    while svc.fill_week("NIFTY", budget=10):
+        pass
+    ana, bars = svc.analytics("NIFTY"), svc.bars("NIFTY")
+    assert all(r["call"]["week"] is not None and r["put"]["week"] is not None for r in ana["chain"])
+    assert (svc.folder / "week").exists() and ana["week_from"]
+    assert bars["symbol"] == "NSE:NIFTY50-INDEX"                       # spot is the default chart
+    assert bars["near"]["line"] and bars["next"]["symbol"] == "NSE:NIFTY26DECFUT" and bars["next"]["line"]

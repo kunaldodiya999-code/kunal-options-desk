@@ -55,7 +55,7 @@ def free_port(start: int = 8800) -> int:
 @dataclass
 class View:
     index: str = "NIFTY"
-    instrument: str = "FUT"          # FUT or INDEX (index uses futures volume: owner rule)
+    instrument: str = "INDEX"        # INDEX (spot, default: owner 25 Nov) or FUT; the index uses futures volume
     tf: int = 5
     each_side: int = 8
     ema1: int = 9
@@ -69,10 +69,14 @@ class Market:
     lot: int = 1
     expiry: Optional[date] = None
     future: Optional[str] = None
+    next_future: Optional[str] = None
     calls: dict = field(default_factory=dict)
     puts: dict = field(default_factory=dict)
     fut_min: list = field(default_factory=list)
     idx_min: list = field(default_factory=list)
+    nxt_min: list = field(default_factory=list)       # next month's future (line on the spot chart)
+    week_base: dict = field(default_factory=dict)     # "strike|side" -> OI (lots) at the previous expiry's close
+    week_tried: set = field(default_factory=set)
     opt_min: dict = field(default_factory=dict)       # symbol -> [Candle]
     series: list = field(default_factory=list)        # minute snapshots of today (last one = latest)
     book: TrapBook = field(default_factory=TrapBook)
@@ -165,7 +169,8 @@ class DeskService:
             info = INDEXES[index]
             today = self.clock().date()
             c = nearest_contracts(self.master_loader(info.master, today), info.underlying, today)
-            m = Market(index, c.lot_size, c.expiry, c.future, c.calls, c.puts)
+            m = Market(index, c.lot_size, c.expiry, c.future, c.next_future, c.calls, c.puts)
+            m.week_base = self._load_week(index, c.expiry)
             m.series = self.store.series(index, today)
             for a, b in zip(m.series, m.series[1:]):
                 m.book.update(a, b)
@@ -197,9 +202,56 @@ class DeskService:
         if m.future:
             m.fut_min = self.client.minutes(m.future, start, today)
         m.idx_min = self.client.minutes(info.spot, start, today)
+        if m.next_future:
+            m.nxt_min = self.client.minutes(m.next_future, start, today)
         for sym in self.atm_symbols(index):
             if sym:
                 m.opt_min[sym] = self.client.minutes(sym, today, today)
+
+    # ------------------------------------------------------------------ Week column (OI since the series began)
+    def week_file(self, index: str, expiry) -> Path:
+        return self.folder / "week" / f"{index}_{expiry}.json"
+
+    def _load_week(self, index: str, expiry) -> dict:
+        try:
+            return json.loads(self.week_file(index, expiry).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def fill_week(self, index: str, budget: int = 3) -> int:
+        """OI at the close of the previous expiry (= expiry - 7 days, or the trading day before it) for the strikes
+        on the screen, a few symbols per call (FYERS daily candles with OI), saved on the PC for the whole series."""
+        m = self.market(index)
+        snap = m.series[-1] if m.series else None
+        if not snap or not m.expiry or not hasattr(self.client, "daily_oi"):
+            return 0
+        base_day = m.expiry - timedelta(days=7)
+        wanted = []
+        for r in chain_table(snap, None, self.view.each_side + 2):
+            for side, book in (("call", m.calls), ("put", m.puts)):
+                key = f"{r['strike']:g}|{side}"
+                sym = book.get(r["strike"])
+                if sym and key not in m.week_base and key not in m.week_tried:
+                    wanted.append((key, sym))
+        done = 0
+        for key, sym in wanted[:budget]:
+            m.week_tried.add(key)
+            try:
+                days = self.client.daily_oi(sym, base_day - timedelta(days=30), self.clock().date())
+            except Exception as exc:
+                if login_problem(exc):
+                    raise
+                if len(m.week_tried) <= budget:
+                    self.note(f"Week column: FYERS daily OI not available ({str(exc)[:100]})")
+                continue
+            before = [oi for d, oi in days if d <= base_day]
+            m.week_base[key] = (before[-1] if before else 0.0) / max(1, m.lot)
+            done += 1
+        if done:
+            path = self.week_file(index, m.expiry)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(m.week_base), encoding="utf-8")
+        return done
 
     def atm_symbols(self, index: str) -> tuple[Optional[str], Optional[str]]:
         m = self.market(index)
@@ -237,9 +289,9 @@ class DeskService:
         levels = []
         if s["call_wall"]:
             levels.append({"price": s["call_wall"], "kind": "call_wall",
-                           "title": f"call wall {lakh(s['call_wall_oi'])}"})
+                           "title": "call wall"})
         if s["put_wall"]:
-            levels.append({"price": s["put_wall"], "kind": "put_wall", "title": f"put wall {lakh(s['put_wall_oi'])}"})
+            levels.append({"price": s["put_wall"], "kind": "put_wall", "title": "put wall"})
         if hedge.get("heaviest"):
             levels.append({"price": hedge["heaviest"], "kind": "hedging",
                            "title": f"heaviest hedging {hedge['heaviest']:,.0f}"})
@@ -251,7 +303,9 @@ class DeskService:
         a = snap.row(snap.atm) if snap.atm else None
         out = {
             "type": "analytics", "index": index, "ts": snap.ts, "expiry": snap.expiry, "lot": m.lot,
-            "summary": s, "saying": saying, "chain": chain_table(snap, before15, self.view.each_side),
+            "summary": s, "saying": saying,
+            "chain": chain_table(snap, before15, self.view.each_side, m.week_base),
+            "week_from": (m.expiry - timedelta(days=7)).isoformat() if m.expiry else None,
             "trapped": traps, "maths": option_maths(snap, before15, at_open, avg_move), "hedging": hedge,
             "oi_series": [{"time": x.ts, "calls": sum(r.call.oi_change for r in x.rows),
                            "puts": sum(r.put.oi_change for r in x.rows)} for x in m.series],
@@ -293,6 +347,9 @@ class DeskService:
         bull_day = sum(r["bull"] for r in today_bars)
         bear_day = sum(r["bear"] for r in today_bars)
         sym = (m.future if use_fut else INDEXES[index].spot) or INDEXES[index].spot
+
+        def line_of(rows: list) -> list:
+            return [[c.ts, c.close] for c in resample(rows, v.tf)] if rows else []
         ce, pe = self.atm_symbols(index)
         opt = {}
         for key, s in (("ce", ce), ("pe", pe)):
@@ -306,7 +363,9 @@ class DeskService:
                 "flow_rows": [{"time": r["time"], "net": r["net"], "cum": r["cum"], "avg": r["avg"],
                                "bull": r["bull"], "bear": r["bear"]} for r in flow["rows"]],
                 "divergences": divergences(bars, flow["rows"]),
-                "levels": day_levels(mins, today), "bull_day": bull_day, "bear_day": bear_day, "options": opt}
+                "levels": day_levels(mins, today), "bull_day": bull_day, "bear_day": bear_day, "options": opt,
+                "near": {"symbol": m.future, "line": line_of(m.fut_min)},
+                "next": {"symbol": m.next_future, "line": line_of(m.nxt_min)}}
 
     # ------------------------------------------------------------------ live ticks
     def _on_tick(self, symbol: str, q: dict) -> None:
@@ -391,6 +450,7 @@ class DeskService:
                     if mono - last_chain >= CHAIN_EVERY:
                         last_chain = mono
                         self.refresh_chain(idx)
+                        self.fill_week(idx)
                         self.broadcast(self.analytics(idx))
                 self.status = "live"
             except Exception as exc:
