@@ -84,7 +84,7 @@
       grid: { vertLines: { color: v("--grid") }, horzLines: { color: v("--grid") } },
       rightPriceScale: { borderColor: v("--line") }, timeScale: { borderColor: v("--line") }
     }));
-    drawProfile(); drawStrip();
+    drawProfile(); drawStrip(); if (typeof drawHedge === "function" && A) drawHedge();
   }
   $("theme").onclick = () => { dark = !dark; store.set("dark", dark); applyTheme(); };
 
@@ -297,7 +297,7 @@
     const t = d.trapped;
     $("trapmeta").textContent = ` ${t.pockets} pockets under water · about ₹${lk(t.total)} of value against them · recorded today`;
     $("trapcards").innerHTML = t.cards.map(c => card(Object.assign({ tone: "bearish" }, c))).join("");
-    $("traptable").innerHTML = `<tr><th>STRIKE</th><th>OPTION</th><th>WHO</th><th>LOTS</th><th>BUILT AT</th><th>NOW</th><th>UNDER WATER</th><th>MONEY</th></tr>` +
+    $("traptable").innerHTML = `<tr><th>STRIKE</th><th>OPTION</th><th>WHO</th><th class="num">LOTS</th><th class="num">BUILT AT</th><th class="num">NOW</th><th class="num">UNDER WATER</th><th class="num">MONEY</th></tr>` +
       t.rows.map(r => `<tr><td>${fmt(r.strike, 0)}</td><td>${r.option}</td><td class="${r.who === "buyers" ? "buying" : "writing"}">${r.who}</td><td class="num">${fmt(r.lots, 0)}</td>` +
         `<td class="num">${fmt(r.built_at)}</td><td class="num">${fmt(r.now)}</td><td class="num neg">${Math.round(r.under_water * 100)}%</td><td class="num">₹${lk(r.money)}</td></tr>`).join("");
     const m = d.maths;
@@ -308,8 +308,7 @@
     const hg = d.hedging;
     $("hedgemeta").textContent = hg.heaviest ? ` heaviest at ${fmt(hg.heaviest, 0)} · ${lk(hg.buy_on_rise)} lots bought on a 50-point rise, ${lk(hg.sell_on_fall)} sold on a fall` : "";
     $("hedgecards").innerHTML = hg.cards.map(card).join("");
-    $("hedgetable").innerHTML = `<tr><th>STRIKE</th><th>LOTS HEDGED PER 50-POINT MOVE</th><th>SHARE OF THE HEAVIEST</th></tr>` +
-      hg.rows.filter(r => r.share >= 0.02).map(r => `<tr><td>${fmt(r.strike, 0)}</td><td><span class="hbar" style="width:${Math.round(r.share * 300)}px"></span>${fmt(r.lots, 0)}</td><td>${Math.round(r.share * 100)}%</td></tr>`).join("");
+    drawHedge();
     if (d.log) $("log").textContent = d.log.join("\n");
     const sw = d.summary, lv = [];
     if (sw.call_wall) lv.push(`<div class="lvl"><b class="neg">Call wall ${fmt(sw.call_wall, 0)}</b><span>${lk(sw.call_wall_oi)} lots open</span></div>`);
@@ -360,6 +359,84 @@
       `<tr>${head.map(th).join("")}<th style="text-align:center">Strike</th>${head.slice().reverse().map(th).join("")}</tr>` +
       rows.map(r => `<tr class="${r.atm ? "atm" : ""}">${leg(r.call, "call")}<td class="k">${fmt(r.strike, 0)}</td>${leg(r.put, "put")}</tr>`).join("");
   }
+
+  // ------------------------------------------------------------------ hover card on the OI-added-today lines
+  const hhmm = t => { const d = new Date((t - SHIFT) * 1000); return d.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }); };
+  oiC.subscribeCrosshairMove(p => {
+    const tip = $("oitip");
+    const c = p && p.seriesData && p.seriesData.get(oiCalls), u = p && p.seriesData && p.seriesData.get(oiPuts);
+    if (!p || !p.point || !p.time || !c || !u) { tip.style.display = "none"; return; }
+    const diff = u.value - c.value;
+    tip.innerHTML = `<div class="t">${hhmm(p.time)} · OI added today</div><div class="m">${esc(A && A.index || "")} · expiry ${esc(A && A.expiry || "-")}</div>` +
+      `<div class="row"><span><i class="dot" style="background:#f23645"></i>Calls</span><b>${sg(c.value)} lots</b></div>` +
+      `<div class="row"><span><i class="dot" style="background:#089981"></i>Puts</span><b>${sg(u.value)} lots</b></div>` +
+      `<div class="row"><span>Puts − calls</span><b class="${diff >= 0 ? "pos" : "neg"}">${sg(diff)}</b></div>` +
+      `<div class="m">${diff >= 0 ? "More puts than calls added (put writers busier)" : "More calls than puts added (call writers busier)"}</div>`;
+    const box = $("oichart"), w = box.clientWidth;
+    tip.style.display = "block";
+    tip.style.left = (p.point.x + 230 > w ? p.point.x - 220 : p.point.x + 18) + "px";
+    tip.style.top = (box.offsetTop + 2) + "px";
+  });
+
+  // ------------------------------------------------------------------ hedging pressure: strikes across, bars up
+  let hedgeBars = [];
+  function drawHedge() {
+    const cv = $("hedgechart"); if (!cv || !A || A.empty) return;
+    const rows = A.hedging.rows, w = cv.clientWidth, h = cv.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (!w) return;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+    const left = 8, right = w - 8, top = 22, bottom = h - 34, n = rows.length;
+    if (!n) return;
+    const step = (right - left) / n, bw = Math.max(3, step * 0.7), max = Math.max(...rows.map(r => r.lots), 1);
+    ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.strokeStyle = v("--grid"); ctx.beginPath(); ctx.moveTo(left, bottom + .5); ctx.lineTo(right, bottom + .5); ctx.stroke();
+    hedgeBars = [];
+    const every = Math.max(1, Math.ceil(46 / step));
+    const xs = rows.map((r, i) => left + step * i + step / 2);
+    rows.forEach((r, i) => {
+      const x = xs[i], bh = r.lots / max * (bottom - top);
+      ctx.fillStyle = r.top ? (r.side === "call" ? "#f23645" : "#089981") : v("--bar");
+      ctx.fillRect(x - bw / 2, bottom - bh, bw, bh);
+      hedgeBars.push({ x0: x - step / 2, x1: x + step / 2, r });
+    });
+    // labels that never overlap: the top 5 first (value above the bar on two levels if crowded, strike below)
+    const taken = [[], [], [], []], fits = (lvl, a, b) => !taken[lvl].some(([p, q]) => a < q + 4 && b > p - 4);
+    const put = (lvl, text, x, y, color) => {
+      const half = ctx.measureText(text).width / 2;
+      if (!fits(lvl, x - half, x + half)) return false;
+      taken[lvl].push([x - half, x + half]); ctx.fillStyle = color; ctx.fillText(text, x, y); return true;
+    };
+    const order = rows.map((r, i) => i).sort((a, b) => (rows[a].top || 99) - (rows[b].top || 99));
+    for (const i of order) {
+      const r = rows[i], x = xs[i], bh = r.lots / max * (bottom - top);
+      if (r.top && !put(0, `#${r.top} ${lk(r.lots)}`, x, bottom - bh - 5, v("--text"))) put(1, `#${r.top} ${lk(r.lots)}`, x, bottom - bh - 18, v("--text"));
+      if (r.top) { if (!put(2, fmt(r.strike, 0), x, bottom + 15, v("--text"))) put(3, fmt(r.strike, 0), x, bottom + 28, v("--text")); }
+      else if (i % every === 0) put(2, fmt(r.strike, 0), x, bottom + 15, v("--muted"));
+    }
+    const price = A.hedging.price;
+    if (price && n > 1) {
+      const k0 = rows[0].strike, k1 = rows[n - 1].strike, x = left + step / 2 + (price - k0) / (k1 - k0) * (step * (n - 1));
+      ctx.strokeStyle = v("--blue"); ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, top - 12); ctx.lineTo(x, bottom); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = v("--blue"); ctx.fillText(`price ${fmt(price, 0)}`, x, top - 14 + 10);
+    }
+  }
+  $("hedgechart").addEventListener("mousemove", e => {
+    const tip = $("hedgetip"), rect = e.target.getBoundingClientRect(), x = e.clientX - rect.left;
+    const b = hedgeBars.find(b => x >= b.x0 && x < b.x1);
+    if (!b) { tip.style.display = "none"; return; }
+    const r = b.r, tot = r.lots || 1;
+    tip.innerHTML = `<div class="t">Strike ${fmt(r.strike, 0)}${r.top ? ` · #${r.top}` : ""}</div><div class="m">lots of futures hedged for a 50-point move</div>` +
+      `<div class="row"><span>Total</span><b>${fmt(r.lots, 0)}</b></div>` +
+      `<div class="row"><span><i class="dot" style="background:#f23645"></i>From call writers</span><b>${fmt(r.call_lots, 0)} (${Math.round(r.call_lots / tot * 100)}%)</b></div>` +
+      `<div class="row"><span><i class="dot" style="background:#089981"></i>From put writers</span><b>${fmt(r.put_lots, 0)} (${Math.round(r.put_lots / tot * 100)}%)</b></div>` +
+      `<div class="row"><span>Share of the heaviest</span><b>${Math.round(r.share * 100)}%</b></div>`;
+    tip.style.display = "block";
+    tip.style.left = Math.min(x + 14, rect.width - 240) + "px"; tip.style.top = "10px";
+  });
+  $("hedgechart").addEventListener("mouseleave", () => { $("hedgetip").style.display = "none"; });
+  new ResizeObserver(() => drawHedge()).observe($("hedgechart"));
 
   function applyToggles(noRender) {
     $("cpcard").style.display = T("cpcharts") ? "" : "none";

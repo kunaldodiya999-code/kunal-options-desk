@@ -76,7 +76,9 @@
       Strikes each side <select id="each"><option>5</option><option selected>8</option><option>10</option><option>15</option></select></div>
     <div id="saying"></div>
     <div id="strip_summary" class="kpis"></div>
-    <div class="chart oichart" id="oichart"></div>
+    <div class="oiwrap"><div class="legend small muted">OI added today, all strikes read: <span class="neg">calls</span> ·
+      <span class="pos">puts</span> (hover the lines for the values at any time)</div>
+      <div class="chart oichart" id="oichart"></div><div id="oitip" class="hovercard"></div></div>
     <div id="chainwrap"><table id="chain"></table></div>
     <p class="muted small" id="chainnote">Reading (last 15 minutes): <b class="buying">Call / Put Buying</b> = OI up, premium up ·
       <b class="writing">Call / Put Writing</b> = OI up, premium down · <b class="sc">Short Cov</b> = OI down, premium up
@@ -105,7 +107,9 @@
   <section class="card" id="hedgecard">
     <div class="head"><b>HEDGING PRESSURE</b><span class="muted" id="hedgemeta"></span></div>
     <div class="cards" id="hedgecards"></div>
-    <table class="tbl" id="hedgetable"></table>
+    <div class="hedgewrap"><canvas id="hedgechart"></canvas><div id="hedgetip" class="hovercard"></div></div>
+    <p class="muted small">Lots of futures hedged for a 50-point move, at each strike. Top 5 coloured: <b class="neg">red</b> =
+      mostly call writers there, <b class="pos">green</b> = mostly put writers there. Dashed line = price now. Hover a bar.</p>
   </section>
 </main>
 

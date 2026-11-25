@@ -449,11 +449,14 @@ def hedging(snap: Snapshot, move: float = 50.0) -> dict:
         return {"rows": [], "cards": []}
     rows = []
     for r in snap.rows:
-        g = (r.call.gamma or 0) * r.call.oi + (r.put.gamma or 0) * r.put.oi
-        rows.append({"strike": r.strike, "lots": g * move})
+        c, p = (r.call.gamma or 0) * r.call.oi * move, (r.put.gamma or 0) * r.put.oi * move
+        rows.append({"strike": r.strike, "lots": c + p, "call_lots": c, "put_lots": p,
+                     "side": "call" if c >= p else "put"})
     top = max((x["lots"] for x in rows), default=0) or 1
+    ranked = sorted(rows, key=lambda x: -x["lots"])[:5]       # owner: top 5 in green (puts) / red (calls)
     for x in rows:
         x["share"] = x["lots"] / top
+        x["top"] = (ranked.index(x) + 1) if x in ranked else None
     now = _book_delta(snap, f)
     up = _book_delta(snap, f + move)
     dn = _book_delta(snap, f - move)
@@ -477,7 +480,7 @@ def hedging(snap: Snapshot, move: float = 50.0) -> dict:
                   "text": f"Their book is {'short' if now < 0 else 'long'}, so a {'rise' if now < 0 else 'fall'} "
                           f"leaves them {'buying' if now < 0 else 'selling'} futures into it. This is their "
                           "exposure as it stands, not a forecast."})
-    return {"heaviest": heavy["strike"] if heavy else None, "buy_on_rise": buy_on_rise,
+    return {"heaviest": heavy["strike"] if heavy else None, "buy_on_rise": buy_on_rise, "price": f,
             "sell_on_fall": sell_on_fall, "writers_delta": now, "rows": rows, "cards": cards}
 
 

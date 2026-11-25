@@ -75,3 +75,11 @@ table { border-collapse:collapse; width:100%; font-size:12px; }
 #levels .lvl { padding:5px 0; border-bottom:1px solid var(--line); }
 #levels .lvl b { display:block; font-size:12.5px; } #levels .lvl span { color:var(--muted); font-size:12px; }
 #levels .trap { color:#c040d8; } #levels .hedge { color:var(--purple); }
+.oiwrap, .hedgewrap { position:relative; }
+.hovercard { position:absolute; display:none; z-index:12; min-width:190px; background:#fff; color:#131722; border-radius:8px;
+  padding:9px 12px; font-size:12.5px; line-height:1.55; box-shadow:0 6px 22px rgba(0,0,0,.35); pointer-events:none; }
+.hovercard .t { font-weight:700; font-size:13px; margin-bottom:2px; } .hovercard .m { color:#787b86; font-size:11.5px; }
+.hovercard .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+.hovercard .row { display:flex; justify-content:space-between; gap:16px; } .hovercard b { font-weight:700; }
+#hedgechart { width:100%; height:270px; display:block; }
+.tbl th.num { text-align:right; }
