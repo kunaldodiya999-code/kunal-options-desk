@@ -27,6 +27,9 @@
       <label><input type="checkbox" data-t="dayopen" checked> Day's open</label>
       <label><input type="checkbox" data-t="prevday" checked> Previous day H / L / C</label>
       <label><input type="checkbox" data-t="first30"> First 30 min range</label>
+      <label><input type="checkbox" data-t="vwap1"> VWAP ±1 deviation</label>
+      <label><input type="checkbox" data-t="vwap2"> VWAP ±2 deviation</label>
+      <label><input type="checkbox" data-t="bb"> Bollinger Bands (20, 2)</label>
       <label><input type="checkbox" data-t="bbvwap"> Bulls' and bears' VWAP</label>
       <label><input type="checkbox" data-t="ema1"> EMA 1</label>
       <label><input type="checkbox" data-t="ema2"> EMA 2</label>
@@ -39,6 +42,8 @@
       <label><input type="checkbox" data-t="prof_dex"> Delta profile</label>
       <label><input type="checkbox" data-t="prof_gex"> GEX profile</label>
       <label><input type="checkbox" data-t="cpcharts" checked> Call and put charts</label>
+      <label><input type="checkbox" data-t="opt_vp" checked> Call / put: volume profile</label>
+      <label><input type="checkbox" data-t="opt_dp" checked> Call / put: delta profile</label>
       <label><input type="checkbox" data-t="strip" checked> Bull / bear strip</label>
       <label><input type="checkbox" data-t="adaptive" checked> Adaptive average</label>
       <label><input type="checkbox" data-t="trapped" checked> Trapped positions</label>
@@ -61,14 +66,16 @@
   </section>
   <section class="card chartcard small">
     <div class="legend" id="flowlegend"></div>
-    <div id="flow" class="chart"></div>
+    <div id="flow" class="chart"></div><div id="flowtip" class="hovercard"></div>
   </section>
 
   <section class="card" id="cpcard">
     <div class="head"><b>CALL AND PUT CHARTS</b><span class="sp"></span>Strike
       <select id="strike"><option value="">ATM (follows the price)</option></select></div>
-    <div class="two"><div class="mini"><div class="legend" id="celeg"></div><div id="cechart" class="chart"></div></div>
-      <div class="mini"><div class="legend" id="peleg"></div><div id="pechart" class="chart"></div></div></div>
+    <div class="two"><div class="mini"><div class="legend" id="celeg"></div><div class="optwrap"><div id="cechart" class="chart"></div><canvas id="ceprof" class="optprof"></canvas></div></div>
+      <div class="mini"><div class="legend" id="peleg"></div><div class="optwrap"><div id="pechart" class="chart"></div><canvas id="peprof" class="optprof"></canvas></div></div></div>
+    <p class="muted small">Sky blue = volume profile of today (bright part = the 70% value area, with VAH / POC / VAL). Green / red
+      bars beside it = delta profile (bull minus bear volume at each price, estimated from candle closes). Blue line = the option's VWAP.</p>
   </section>
 
   <section class="card" id="optcard">

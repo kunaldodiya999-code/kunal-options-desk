@@ -53,6 +53,9 @@
   const vol = main.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
   main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   const vwapS = line(main, "#2962ff"), bvwS = line(main, "#089981", 1, 2), svwS = line(main, "#f23645", 1, 2);
+  const u1S = line(main, "rgba(91,140,255,.55)", 1, 2), l1S = line(main, "rgba(91,140,255,.55)", 1, 2);
+  const u2S = line(main, "rgba(91,140,255,.35)", 1, 1), l2S = line(main, "rgba(91,140,255,.35)", 1, 1);
+  const bbU = line(main, "rgba(255,183,77,.55)", 1), bbL = line(main, "rgba(255,183,77,.55)", 1), bbM = line(main, "rgba(255,183,77,.35)", 1, 2);
   const ema1S = line(main, "#ff9800", 1), ema2S = line(main, "#9c27b0", 1);
   const futLine = color => main.addLineSeries({ color, lineWidth: 2, lastValueVisible: true, priceLineVisible: false,
     crosshairMarkerVisible: false });
@@ -63,9 +66,81 @@
   const cumS = flowC.addLineSeries({ color: "#2962ff", lineWidth: 2, priceLineVisible: false });
   const avgS = line(flowC, "#ff9800", 2);
 
-  const ceC = mk($("cechart")), peC = mk($("pechart"));
-  const ceS = ceC.addCandlestickSeries({ upColor: "#089981", downColor: "#f23645", borderVisible: false, wickUpColor: "#089981", wickDownColor: "#f23645" });
-  const peS = peC.addCandlestickSeries({ upColor: "#089981", downColor: "#f23645", borderVisible: false, wickUpColor: "#089981", wickDownColor: "#f23645" });
+  function optChart(key) {
+    const c = mk($(key + "chart"));
+    const candle = c.addCandlestickSeries({ upColor: "#089981", downColor: "#f23645", borderVisible: false, wickUpColor: "#089981", wickDownColor: "#f23645" });
+    const volS = c.addHistogramSeries({ priceScaleId: "ov", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    c.priceScale("ov").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    const vw = line(c, "rgba(41,98,255,.85)", 1);
+    const o = { key, c, candle, volS, vw, bars: [], symbol: "" };
+    c.subscribeCrosshairMove(p => optLegend(o, p && p.time));
+    c.timeScale().subscribeVisibleLogicalRangeChange(() => drawOptProfile(o));
+    new ResizeObserver(() => drawOptProfile(o)).observe($(key + "chart"));
+    return o;
+  }
+  const OPT = { ce: optChart("ce"), pe: optChart("pe") };
+  const ceC = OPT.ce.c, peC = OPT.pe.c;
+  function optLegend(o, t) {
+    const el = $(o.key + "leg");
+    if (!o.bars.length) { el.innerHTML = o.symbol ? `<b>${esc(o.symbol)}</b> no candles yet` : ""; return; }
+    const i = t ? o.bars.findIndex(b => b.t + SHIFT === t) : -1, b = o.bars[i < 0 ? o.bars.length - 1 : i];
+    const tot = (b.bv + b.sv) || 1;
+    el.innerHTML = `<b>${esc(o.symbol)}</b> · O ${fmt(b.o)} H ${fmt(b.h)} L ${fmt(b.l)} C ${fmt(b.c)} · Vol ${lk(b.v)}` +
+      ` (<span class="g">bull ${Math.round(b.bv / tot * 100)}%</span> · <span class="r">bear ${Math.round(b.sv / tot * 100)}%</span>)` +
+      (o.vwapNow ? ` · <span class="b">VWAP ${fmt(o.vwapNow)}</span>` : "");
+  }
+  function setOpt(o, data) {
+    o.symbol = data ? data.symbol : ""; o.bars = data ? data.bars : [];
+    const t = o.bars.map(b => b.t + SHIFT);
+    o.candle.setData(o.bars.map((b, i) => ({ time: t[i], open: b.o, high: b.h, low: b.l, close: b.c })));
+    o.volS.setData(o.bars.map((b, i) => ({ time: t[i], value: b.v, color: b.c >= b.o ? "rgba(8,153,129,.35)" : "rgba(242,54,69,.35)" })));
+    let pv = 0, v = 0, day = null;                       // VWAP of the option, from today's candles
+    const vwv = o.bars.map(b => { const d = Math.floor((b.t + SHIFT) / 86400); if (d !== day) { day = d; pv = 0; v = 0; }
+      if (b.v > 0) { pv += (b.h + b.l + b.c) / 3 * b.v; v += b.v; } return v ? pv / v : null; });
+    o.vwapNow = vwv.length ? vwv[vwv.length - 1] : null;
+    o.vw.setData(series(vwv, t));
+    optLegend(o); drawOptProfile(o);
+  }
+  // volume profile (total volume, 70% value area, sky blue) + delta profile (bull - bear volume) on an option chart
+  function drawOptProfile(o) {
+    const cv = $(o.key + "prof"), el = $(o.key + "chart"); if (!cv || !el) return;
+    const w = el.clientWidth, h = el.clientHeight, dpr = window.devicePixelRatio || 1;
+    cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px";
+    const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    if (!o.bars.length || (!T("opt_vp") && !T("opt_dp"))) return;
+    const lo = Math.min(...o.bars.map(b => b.l)), hi = Math.max(...o.bars.map(b => b.h));
+    if (!(hi > lo)) return;
+    const n = 40, step = (hi - lo) / n, vol = new Array(n).fill(0), del = new Array(n).fill(0);
+    for (const b of o.bars) {                           // spread each candle's volume over its range
+      const a = Math.max(0, Math.floor((b.l - lo) / step)), z = Math.min(n - 1, Math.floor((b.h - lo) / step)), k = z - a + 1;
+      for (let i = a; i <= z; i++) { vol[i] += b.v / k; del[i] += (b.bv - b.sv) / k; }
+    }
+    const total = vol.reduce((x, y) => x + y, 0); if (!total) return;
+    let poc = vol.indexOf(Math.max(...vol)), va = new Set([poc]), sum = vol[poc], up = poc + 1, dn = poc - 1;
+    while (sum < total * 0.7 && (up < n || dn >= 0)) {
+      const vu = up < n ? vol[up] : -1, vd = dn >= 0 ? vol[dn] : -1;
+      if (vu >= vd) { va.add(up); sum += vu; up++; } else { va.add(dn); sum += vd; dn--; }
+    }
+    const right = w - o.c.priceScale("right").width() - 4, maxV = Math.max(...vol), maxD = Math.max(...del.map(Math.abs), 1e-9);
+    const vpW = right * 0.28, dpW = right * 0.12, dpX = T("opt_vp") ? right - vpW - 8 : right;
+    for (let i = 0; i < n; i++) {
+      const y1 = o.candle.priceToCoordinate(lo + step * (i + 1)), y0 = o.candle.priceToCoordinate(lo + step * i);
+      if (y1 === null || y0 === null) continue;
+      const top = Math.min(y0, y1) + .5, bh = Math.max(1, Math.abs(y0 - y1) - 1);
+      if (T("opt_vp")) { ctx.fillStyle = va.has(i) ? "rgba(135,206,235,.30)" : "rgba(135,206,235,.12)";
+        const len = vol[i] / maxV * vpW; ctx.fillRect(right - len, top, len, bh); }
+      if (T("opt_dp")) { ctx.fillStyle = del[i] >= 0 ? "rgba(8,153,129,.35)" : "rgba(242,54,69,.35)";
+        const len = Math.abs(del[i]) / maxD * dpW; ctx.fillRect(dpX - len, top, len, bh); }
+    }
+    if (T("opt_vp")) {
+      const lvl = (price, color, text) => { const y = o.candle.priceToCoordinate(price); if (y === null) return;
+        ctx.strokeStyle = color; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(right - vpW, y); ctx.lineTo(right, y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = color; ctx.font = "10px sans-serif"; ctx.textAlign = "right"; ctx.fillText(text, right - 2, y - 3); ctx.textAlign = "left"; };
+      lvl(lo + step * (Math.max(...va) + 1), "rgba(135,206,235,.9)", "VAH");
+      lvl(lo + step * (poc + .5), "rgba(135,206,235,1)", "POC");
+      lvl(lo + step * Math.min(...va), "rgba(135,206,235,.9)", "VAL");
+    }
+  }
   const oiC = mk($("oichart"));
   const oiCalls = oiC.addLineSeries({ color: "#f23645", lineWidth: 2 }), oiPuts = oiC.addLineSeries({ color: "#089981", lineWidth: 2 });
 
@@ -103,6 +178,11 @@
     vol.setData(T("volume") ? d.bars.map((b, i) => ({ time: times[i], value: b.v,
       color: b.c >= b.o ? "rgba(8,153,129,.45)" : "rgba(242,54,69,.45)" })) : []);
     vwapS.setData(T("vwap") ? series(d.vwap, times) : []);
+    const vb = d.vwap_bands || {}, bb = d.bb || {};
+    u1S.setData(T("vwap1") && vb.u1 ? series(vb.u1, times) : []); l1S.setData(T("vwap1") && vb.l1 ? series(vb.l1, times) : []);
+    u2S.setData(T("vwap2") && vb.u2 ? series(vb.u2, times) : []); l2S.setData(T("vwap2") && vb.l2 ? series(vb.l2, times) : []);
+    bbU.setData(T("bb") && bb.up ? series(bb.up, times) : []); bbL.setData(T("bb") && bb.lo ? series(bb.lo, times) : []);
+    bbM.setData(T("bb") && bb.mid ? series(bb.mid, times) : []);
     bvwS.setData(T("bbvwap") ? series(d.bull_vwap, times) : []);
     svwS.setData(T("bbvwap") ? series(d.bear_vwap, times) : []);
     ema1S.setData(T("ema1") ? series(d.ema1, times) : []);
@@ -114,11 +194,7 @@
     cumS.setData(d.flow_rows.map((r, i) => ({ time: times[i], value: r.cum })));
     avgS.setData(T("adaptive") ? series(d.flow_rows.map(r => r.avg), times) : []);
     lastCandle = d.bars.length ? Object.assign({}, d.bars[d.bars.length - 1]) : null;
-    for (const [key, s, leg] of [["ce", ceS, "celeg"], ["pe", peS, "peleg"]]) {
-      const o = d.options[key];
-      s.setData(o ? o.bars.map(b => ({ time: b.t + SHIFT, open: b.o, high: b.h, low: b.l, close: b.c })) : []);
-      $(leg).innerHTML = o ? `<b>${esc(o.symbol)}</b> ${fmt(o.bars.length ? o.bars[o.bars.length - 1].c : null)}` : "";
-    }
+    setOpt(OPT.ce, d.options.ce); setOpt(OPT.pe, d.options.pe);
     if (!renderBars.fitted || renderBars.key !== d.symbol + d.tf) {
       renderBars.fitted = true; renderBars.key = d.symbol + d.tf;
       main.timeScale().setVisibleLogicalRange({ from: Math.max(0, d.bars.length - 120), to: d.bars.length + 8 });
@@ -138,6 +214,23 @@
       (T("vwap") ? `<br><span class="b">VWAP ${fmt(B.vwap[i < 0 ? B.vwap.length - 1 : i])}</span>` : "") +
       (T("bullbear") ? `<br>Today so far: <span class="g">bull volume ${lk(B.bull_day)} (${Math.round(B.bull_day / day * 100)}%)</span> · <span class="r">bear volume ${lk(B.bear_day)} (${Math.round(B.bear_day / day * 100)}%)</span>` : "");
   }
+  flowC.subscribeCrosshairMove(p => {
+    const tip = $("flowtip");
+    if (!B || !p || !p.point || !p.time) { tip.style.display = "none"; return; }
+    const i = B.bars.findIndex(b => b.t + SHIFT === p.time);
+    if (i < 0) { tip.style.display = "none"; return; }
+    const r = B.flow_rows[i], b = B.bars[i];
+    tip.innerHTML = `<div class="t">${hhmm(p.time)} · buying − selling</div>` +
+      `<div class="row"><span>This candle</span><b class="${r.net >= 0 ? "pos" : "neg"}">${sg(r.net)}</b></div>` +
+      `<div class="row"><span><i class="dot" style="background:#2962ff"></i>Running total today</span><b>${sg(r.cum)}</b></div>` +
+      (r.avg !== null ? `<div class="row"><span><i class="dot" style="background:#ff9800"></i>Adaptive average</span><b>${sg(r.avg)}</b></div>` : "") +
+      `<div class="row"><span>Bull / bear volume</span><b><span class="pos">${lk(r.bull)}</span> / <span class="neg">${lk(r.bear)}</span></b></div>` +
+      `<div class="row"><span>Close</span><b>${fmt(b.c)}</b></div>`;
+    const box = $("flow"), wd = box.clientWidth;
+    tip.style.display = "block";
+    tip.style.left = (p.point.x + 220 > wd ? p.point.x - 210 : p.point.x + 16) + "px";
+    tip.style.top = (box.offsetTop + 2) + "px";
+  });
   function flowLegend() {
     const f = B.flow;
     $("flowlegend").innerHTML = `Buying − selling, today: <b class="${f.today >= 0 ? "g" : "r"}">${sg(f.today)}</b> · this candle ${sg(f.this_candle)}<br>` +
@@ -229,7 +322,7 @@
     dotHits = [];
     if (!A || A.empty) return;
     const right = w - main.priceScale("right").width() - 4, gap = 10, n = PROFILES.length;
-    const colW = n ? Math.max(40, Math.min(Number(prefs.pw) || 160, (right * 0.55 - gap * (n - 1)) / n)) : 0;
+    const colW = n ? Math.max(36, Math.min(Number(prefs.pw) || 110, (right * 0.34 - gap * (n - 1)) / n)) : 0;
     const dotX = (n ? right - n * (colW + gap) + gap : right) - 14;
     const dot = (price, color, text, diamond) => {
       const y = candles.priceToCoordinate(price + shift());
@@ -256,8 +349,11 @@
       const x = xr - len;
       if (hollow) { ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.strokeRect(x + .5, y + .5, len, th - 1); }
       else { ctx.fillStyle = color; ctx.fillRect(x, y, len, th); }
-      if (prefs.pv && len > 34 && th >= 7) { ctx.fillStyle = hollow ? color : "#fff"; ctx.fillText(label, x + 3, y + th / 2 + .5); }
+      if (prefs.pv && len > 34 && th >= 7) { ctx.fillStyle = textCol; ctx.fillText(label, x + 3, y + th / 2 + .5); }
     };
+    const textCol = getComputedStyle(document.documentElement).getPropertyValue("--text");
+    const COL = { oi_total: ["rgba(242,54,69,.42)", "rgba(8,153,129,.42)"], oi_change: ["rgba(242,54,69,.28)", "rgba(8,153,129,.28)"],
+      prof_dex: ["rgba(41,98,255,.40)", "rgba(255,152,0,.40)"], prof_gex: ["rgba(171,71,188,.40)", "rgba(0,188,212,.40)"] };
     const muted = getComputedStyle(document.documentElement).getPropertyValue("--muted");
     PROFILES.forEach(([key, title, ck, pk], i) => {
       const xr = right - i * (colW + gap);
@@ -268,9 +364,8 @@
         const c = p[ck] || 0, u = p[pk] || 0;
         const label = v => key === "oi_change" || key === "prof_dex" ? sg(v) : lk(v);
         const hollowC = key === "oi_change" && c < 0, hollowP = key === "oi_change" && u < 0;
-        const alpha = key === "oi_total" ? .75 : key === "oi_change" ? .45 : .6;
-        bar(xr, Math.abs(c) / max * colW, y - th, hollowC ? "rgba(242,54,69,.9)" : `rgba(242,54,69,${alpha})`, hollowC, label(c));
-        bar(xr, Math.abs(u) / max * colW, y, hollowP ? "rgba(8,153,129,.9)" : `rgba(8,153,129,${alpha})`, hollowP, label(u));
+        bar(xr, Math.abs(c) / max * colW, y - th, hollowC ? "rgba(242,54,69,.7)" : COL[key][0], hollowC, label(c));
+        bar(xr, Math.abs(u) / max * colW, y, hollowP ? "rgba(8,153,129,.7)" : COL[key][1], hollowP, label(u));
       }
     });
   }
@@ -316,7 +411,8 @@
     if (sw.put_wall) lv.push(`<div class="lvl"><b class="pos">Put wall ${fmt(sw.put_wall, 0)}</b><span>${lk(sw.put_wall_oi)} lots open</span></div>`);
     if (d.hedging.heaviest) lv.push(`<div class="lvl"><b class="hedge">◆ Heaviest hedging ${fmt(d.hedging.heaviest, 0)}</b><span>${lk(d.hedging.buy_on_rise)} lots bought per 50-pt rise</span></div>`);
     d.trapped.rows.slice(0, 6).forEach(r => lv.push(`<div class="lvl"><b class="trap">● Trapped ${esc(r.option.toLowerCase())} ${esc(r.who)} ${fmt(r.strike, 0)}</b>` +
-      `<span>${fmt(r.lots, 0)} lots · ${Math.round(r.under_water * 100)}% down · built ${fmt(r.built_at)}, now ${fmt(r.now)}</span></div>`));
+      `<span>${fmt(r.lots, 0)} lots · ${Math.round(r.under_water * 100)}% down · built ${fmt(r.built_at)}, now ${fmt(r.now)}</span>` +
+      `<span class="stake">At stake ₹${lk(r.lots * d.lot * r.built_at)} · ${r.who === "buyers" ? "loss" : "loss so far"} ₹${lk(r.money)}</span></div>`));
     $("levels").innerHTML = lv.join("") || `<span class="muted">Nothing yet.</span>`;
     renderPricing(d.pricing || {});
     const L = d.live;
@@ -348,7 +444,7 @@
   function renderChain(d) {
     const g = prefs.greeks, rows = d.chain;
     const mx = k => Math.max(...rows.map(r => Math.max(Math.abs(r.call[k] || 0), Math.abs(r.put[k] || 0))), 1e-9);
-    const M = { oi: mx("oi"), week: mx("week"), day: mx("day"), m15: mx("m15"), dex: mx("dex"), gex: mx("gex") };
+    const M = { value: mx("value"), oi: mx("oi"), week: mx("week"), day: mx("day"), m15: mx("m15"), dex: mx("dex"), gex: mx("gex") };
     const SIDE = { call: "rgba(242,54,69,.55)", put: "rgba(8,153,129,.55)" }, GREY = "rgba(120,123,134,.55)";
     // every bar starts at the right edge of its cell and grows left, on both sides (owner 25 Nov)
     const bc = (v, k, color, text, cls, title) => v === null || v === undefined ? `<td class="bc">·</td>` :
@@ -358,7 +454,7 @@
       const arrow = x.arrow === "up" ? ` <b class="arw up" title="3 or more strikes in a row: call writers buying back">▲</b>` :
         x.arrow === "down" ? ` <b class="arw down" title="3 or more strikes in a row: put writers buying back">▼</b>` : "";
       const read = `<td class="rd"><span class="${x.reading === "covering" ? "sc" : x.reading}">${esc(x.label)}</span>${arrow}</td>`;
-      const cells = [bc(x.oi, "oi", SIDE[side], lk(x.oi)),
+      const cells = [bc(x.oi, "oi", SIDE[side], lk(x.oi)), bc(x.value, "value", "rgba(255,183,77,.45)", "₹" + lk(x.value), "", "Outstanding value: OI x lot x premium"),
         chg(x, "week", side, d.week_from ? `OI change since the close of ${d.week_from} (start of this series)` : ""),
         chg(x, "day", side), chg(x, "m15", side, x.premium15 === null || x.premium15 === undefined ? "" : `premium over 15 min ${fmt(x.premium15)}`),
         read,
@@ -368,7 +464,7 @@
       const price = `<td><b>${fmt(x.price)}</b></td>`;
       return side === "call" ? [...cells, ...gk, price].join("") : [price, ...gk.slice().reverse(), ...cells.slice().reverse()].join("");
     };
-    const head = ["OI", "Week", "Day", "15 min", "Reading", "DEX", "GEX", ...(g ? ["IV", "Delta", "Theta"] : []), "Price"];
+    const head = ["OI", "Value", "Week", "Day", "15 min", "Reading", "DEX", "GEX", ...(g ? ["IV", "Delta", "Theta"] : []), "Price"];
     const tip = { Week: "OI change since the start of this weekly series", Day: "OI change today", "15 min": "OI change in the last 15 minutes",
       Reading: "Last 15 minutes. Short Cov = OI down, premium up (writers buying back). Arrow = 3+ strikes in a row",
       DEX: "Delta x OI, in lots of the index", GEX: "Gamma exposure: rupees hedged for a 1% move" };

@@ -120,17 +120,22 @@ def test_tick_recorder_appends(tmp_path):
 
 
 def test_chain_labels_short_cov_arrows_week_dex_gex():
-    before = snap(0)
-    # calls 25450..25600: OI down 300 and the forward rises (premium up) -> Short Cov on 4 strikes in a row
-    oi = {(k, "CE"): 1000 + abs(k - 25400) - (300 if 25450 <= k <= 25600 else 0) for k in range(24850, 25951, 50)}
+    big = range(25250, 25401, 50)
+    before = snap(0, oi={**{(k, "CE"): 1000 + abs(k - 25400) for k in range(24850, 25951, 50)},
+                         **{(k, "CE"): 5000 for k in big}})
+    # calls 25250..25400: 2000 lots bought back each (Rs 50 lakh+), premium up (forward rises) -> arrows UP
+    # calls 25450..25550: 300 lots each (a few lakh only) -> labelled Short Cov but NO arrow (owner: 50 lakh rule)
+    oi = {(k, "CE"): 1000 + abs(k - 25400) - (300 if 25450 <= k <= 25550 else 0) for k in range(24850, 25951, 50)}
+    oi.update({(k, "CE"): 3000 for k in big})
     now = snap(15, fwd=25430, oi=oi)
     base = {f"{k:g}|call": 900.0 for k in range(24850, 25951, 50)}
     table = chain_table(now, before, 8, base)
     row = {r["strike"]: r for r in table}
-    assert all(row[k]["call"]["label"] == "Short Cov" and row[k]["call"]["arrow"] == "up" for k in (25450, 25500, 25600))
-    assert row[25400]["call"]["arrow"] is None
-    assert all(r["put"]["arrow"] != "down" or r["put"]["label"] == "Short Cov" for r in table)
+    assert all(row[k]["call"]["label"] == "Short Cov" and row[k]["call"]["arrow"] == "up" for k in big)
+    assert all(row[k]["call"]["m15_value"] >= 50e5 for k in big)
+    assert all(row[k]["call"]["label"] == "Short Cov" and row[k]["call"]["arrow"] is None for k in (25450, 25500, 25550))
     atm = row[25400]["call"]
+    assert atm["value"] == pytest.approx(atm["oi"] * LOT * atm["price"])
     assert atm["week"] == pytest.approx(atm["oi"] - 900) and row[25400]["put"]["week"] is None
     assert atm["dex"] == pytest.approx(atm["delta"] * atm["oi"])
     assert atm["gex"] > 0 and row[25400]["put"]["dex"] < 0

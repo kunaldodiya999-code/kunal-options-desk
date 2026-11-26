@@ -74,6 +74,7 @@ LABELS = {("call", "buying"): "Call Buying", ("call", "writing"): "Call Writing"
           ("call", "unwinding"): "Long Unwind", ("put", "buying"): "Put Buying", ("put", "writing"): "Put Writing",
           ("put", "covering"): "Short Cov", ("put", "unwinding"): "Long Unwind"}
 RUN = 3        # owner: 3 or more strikes in a row showing Short Cov -> arrow on each of them
+BIG_MOVE = 50e5  # owner 26 Nov: ...but only when each of those strikes moved Rs 50 lakh or more in 15 minutes
 
 
 def chain_table(snap: Snapshot, before15: Optional[Snapshot], each_side: int,
@@ -94,7 +95,10 @@ def chain_table(snap: Snapshot, before15: Optional[Snapshot], each_side: int,
             c = ch15.get((r.strike, side), {})
             rd = c.get("reading", "·")
             base = (week_base or {}).get(f"{r.strike:g}|{side}")
-            row[side] = {"oi": leg.oi, "week": (leg.oi - base) if base is not None else None, "day": leg.oi_change,
+            m15 = c.get("oi") if before15 else None
+            row[side] = {"value": leg.oi * snap.lot_size * (leg.ltp or 0),       # outstanding value, rupees
+                         "m15_value": abs(m15 or 0) * snap.lot_size * (leg.ltp or 0),
+                         "oi": leg.oi, "week": (leg.oi - base) if base is not None else None, "day": leg.oi_change,
                          "m15": c.get("oi") if before15 else None, "reading": rd,
                          "label": LABELS.get((side, rd), "·"), "arrow": None,
                          "dex": (leg.delta * leg.oi) if leg.delta is not None else None,
@@ -107,7 +111,7 @@ def chain_table(snap: Snapshot, before15: Optional[Snapshot], each_side: int,
         i = 0
         while i < len(out):
             j = i
-            while j < len(out) and out[j][side]["reading"] == "covering":
+            while j < len(out) and out[j][side]["reading"] == "covering" and out[j][side]["m15_value"] >= BIG_MOVE:
                 j += 1
             if j - i >= RUN:
                 for k in range(i, j):

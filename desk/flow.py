@@ -111,6 +111,45 @@ def vwap(bars: Sequence[Candle]) -> list[Optional[float]]:
     return out
 
 
+def vwap_bands(bars: Sequence[Candle]) -> dict:
+    """TradingView-style VWAP bands: VWAP +/- 1 and 2 volume-weighted standard deviations (reset each day)."""
+    out = {"u1": [], "l1": [], "u2": [], "l2": []}
+    day, pv, pv2, vol = None, 0.0, 0.0, 0.0
+    for c in bars:
+        d = local(c.ts).date()
+        if d != day:
+            day, pv, pv2, vol = d, 0.0, 0.0, 0.0
+        if c.volume > 0:
+            tp = (c.high + c.low + c.close) / 3
+            pv, pv2, vol = pv + tp * c.volume, pv2 + tp * tp * c.volume, vol + c.volume
+        if vol:
+            vw = pv / vol
+            sd = max(0.0, pv2 / vol - vw * vw) ** 0.5
+            for k, n in (("1", 1), ("2", 2)):
+                out["u" + k].append(vw + n * sd)
+                out["l" + k].append(vw - n * sd)
+        else:
+            for k in out:
+                out[k].append(None)
+    return out
+
+
+def bollinger(closes: Sequence[float], length: int = 20, mult: float = 2.0) -> dict:
+    out = {"mid": [], "up": [], "lo": []}
+    for i in range(len(closes)):
+        if i + 1 < length:
+            for k in out:
+                out[k].append(None)
+            continue
+        w = closes[i + 1 - length:i + 1]
+        m = sum(w) / length
+        sd = (sum((x - m) ** 2 for x in w) / length) ** 0.5
+        out["mid"].append(m)
+        out["up"].append(m + mult * sd)
+        out["lo"].append(m - mult * sd)
+    return out
+
+
 def day_levels(minutes: Sequence[Candle], today: date) -> dict:
     """Day's open, previous session high / low / close, first 30-minute range (from 1-minute candles)."""
     days = sorted({local(c.ts).date() for c in minutes})
@@ -138,4 +177,4 @@ def avg_daily_move(minutes: Sequence[Candle], today: date, sessions: int = 4) ->
     return sum(ranges) / len(ranges) if ranges else None
 
 
-__all__ = ["avg_daily_move", "buy_sell", "day_levels", "divergences", "ema", "kama", "split_volume", "vwap"]
+__all__ = ["bollinger", "vwap_bands", "avg_daily_move", "buy_sell", "day_levels", "divergences", "ema", "kama", "split_volume", "vwap"]

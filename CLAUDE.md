@@ -25,6 +25,12 @@
   votes (parity, 25-delta skew change since open, OI lean); expected move = index x avg(ATM IV, last-hour realised)
   x sqrt(minutes / (252 x 375)); ATM CE / PE rupees = |delta| m + 1/2 gamma m^2 - theta x minutes/375, for half to
   one expected move, next 30 / 60 min and rest of day. Maths, not a direction forecast.
+- Owner 26 Nov 2026 (2nd round): profiles use at most ~34% of the chart, soft colours (OI red/green, DEX blue/orange,
+  GEX purple/cyan), labels in text colour. Toggles vwap1 / vwap2 (TradingView VWAP st-dev bands) and bb (20, 2).
+  Call/put charts: OHLC legend, volume, VWAP, volume profile (sky blue 30%, 70% value area, VAH/POC/VAL) + delta
+  profile (opt_vp / opt_dp). Hover boxes are see-through (~35%, blur, text shadow); flow pane has one too.
+  Chain: Value column (OI x lot x premium). Short Cov arrows only when each of the 3+ strikes moved >= Rs 50 lakh in
+  15 min (analytics.BIG_MOVE). Trapped list shows "At stake" (lots x lot x built price) and the loss.
 - OPTION ARBITRAGE (owner 26 Nov 2026): docs/OPTION_ARBITRAGE.md, package arbitrage/ (core, costs, universe, history,
   report, live), arb_history.py + arbitrage_history.bat (1 year, resumable cache data/arbitrage/cache.sqlite, newest
   first, stops at 90k FYERS calls), arb_live.py + arbitrage_live.bat (market hours, option ASK vs future bid/ask).

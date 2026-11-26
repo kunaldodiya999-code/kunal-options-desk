@@ -25,7 +25,8 @@ from desk.analytics import (TrapBook, chain_table, hedging, lakh, oi_marks, opti
                             realized_vol, summary)
 from desk.candles import IST, Candle, local, resample
 from desk.chain import Snapshot, SnapshotStore, parse
-from desk.flow import avg_daily_move, buy_sell, day_levels, divergences, ema, split_volume, vwap
+from desk.flow import (avg_daily_move, bollinger, buy_sell, day_levels, divergences, ema, split_volume, vwap,
+                       vwap_bands)
 from desk.fyers import (INDEXES, Fyers, auth_code_from, clear_token, credentials, data_dir, exchange_code, load_master,
                         login_url, nearest_contracts, save_token, saved_token, write_env)
 
@@ -379,6 +380,7 @@ class DeskService:
                 opt[key] = {"symbol": s, "bars": [_bar(c) for c in resample(m.opt_min[s], v.tf)]}
         return {"type": "bars", "index": index, "symbol": sym, "tf": v.tf, "instrument": v.instrument,
                 "bars": [_bar(c) for c in bars], "vwap": vwap(bars), "bull_vwap": bvw, "bear_vwap": svw,
+                "vwap_bands": vwap_bands(bars), "bb": bollinger(closes),
                 "ema1": ema(closes, v.ema1), "ema2": ema(closes, v.ema2), "ema_len": [v.ema1, v.ema2],
                 "flow": {k: flow[k] for k in ("today", "this_candle", "share_day", "share_20", "ratio", "avg",
                                               "above_avg")},
