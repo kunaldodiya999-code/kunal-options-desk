@@ -25,8 +25,8 @@ from desk.analytics import (TrapBook, chain_table, hedging, lakh, oi_marks, opti
                             realized_vol, summary)
 from desk.candles import IST, Candle, local, resample
 from desk.chain import Snapshot, SnapshotStore, parse
-from desk.flow import (avg_daily_move, bollinger, buy_sell, day_levels, divergences, ema, split_volume, vwap,
-                       vwap_bands)
+from desk.flow import (avg_daily_move, bollinger, buy_sell, day_levels, day_profile, divergences, ema, split_volume,
+                       vwap, vwap_bands)
 from desk.fyers import (INDEXES, Fyers, auth_code_from, clear_token, credentials, data_dir, exchange_code, load_master,
                         login_url, nearest_contracts, save_token, saved_token, write_env)
 
@@ -38,6 +38,8 @@ def login_problem(exc: Exception) -> bool:
     """FYERS refused because the login (token) is no longer valid: the page must ask for a fresh login."""
     text = str(exc).lower()
     return any(w in text for w in LOGIN_WORDS)
+from desk.bigtrades import BigTrades
+from desk.smc import smc
 from desk.ticks import TickRecorder
 
 WEB = Path(__file__).resolve().parent / "web"
@@ -57,7 +59,7 @@ def free_port(start: int = 8800) -> int:
 @dataclass
 class View:
     index: str = "NIFTY"
-    instrument: str = "INDEX"        # INDEX (spot, default: owner 25 Nov) or FUT; the index uses futures volume
+    instrument: str = "INDEX"        # INDEX (spot, default: owner 25 Nov), FUT (near) or NEXT (next month)
     tf: int = 5
     each_side: int = 8
     ema1: int = 9
@@ -100,6 +102,8 @@ class DeskService:
         self.start_feed = start_feed
         self.store = SnapshotStore(self.folder / "chain")
         self.ticks = TickRecorder(self.folder / "ticks")
+        self.big = BigTrades(self.folder / "bigtrades")
+        self.last_ltp: dict[str, float] = {}
         self.view = View()
         self.markets: dict[str, Market] = {}
         self.lock = threading.RLock()
@@ -346,8 +350,9 @@ class DeskService:
     def bars(self, index: str) -> dict:
         m = self.market(index)
         v = self.view
-        use_fut = (v.instrument == "FUT" and bool(m.fut_min)) or not m.idx_min
-        mins = m.fut_min if use_fut else m.idx_min
+        use_next = v.instrument == "NEXT" and bool(m.nxt_min)
+        use_fut = use_next or (v.instrument == "FUT" and bool(m.fut_min)) or not m.idx_min
+        mins = m.nxt_min if use_next else m.fut_min if use_fut else m.idx_min
         if not use_fut and m.fut_min:            # index has no volume: use the futures' (owner rule)
             fv = {c.ts: c.volume for c in m.fut_min}
             mins = [Candle(c.ts, c.open, c.high, c.low, c.close, fv.get(c.ts, 0.0)) for c in mins]
@@ -369,7 +374,7 @@ class DeskService:
         today_bars = [r for c, r in zip(bars, flow["rows"]) if local(c.ts).date() == today]
         bull_day = sum(r["bull"] for r in today_bars)
         bear_day = sum(r["bear"] for r in today_bars)
-        sym = (m.future if use_fut else INDEXES[index].spot) or INDEXES[index].spot
+        sym = (m.next_future if use_next else m.future if use_fut else INDEXES[index].spot) or INDEXES[index].spot
 
         def line_of(rows: list) -> list:
             return [[c.ts, c.close] for c in resample(rows, v.tf)] if rows else []
@@ -377,7 +382,8 @@ class DeskService:
         opt = {}
         for key, s in (("ce", ce), ("pe", pe)):
             if s and s in m.opt_min:
-                opt[key] = {"symbol": s, "bars": [_bar(c) for c in resample(m.opt_min[s], v.tf)]}
+                opt[key] = {"symbol": s, "bars": [_bar(c) for c in resample(m.opt_min[s], v.tf)],
+                            "big": self.big.today({s})}
         return {"type": "bars", "index": index, "symbol": sym, "tf": v.tf, "instrument": v.instrument,
                 "bars": [_bar(c) for c in bars], "vwap": vwap(bars), "bull_vwap": bvw, "bear_vwap": svw,
                 "vwap_bands": vwap_bands(bars), "bb": bollinger(closes),
@@ -388,12 +394,31 @@ class DeskService:
                                "bull": r["bull"], "bear": r["bear"]} for r in flow["rows"]],
                 "divergences": divergences(bars, flow["rows"]),
                 "levels": day_levels(mins, today), "bull_day": bull_day, "bear_day": bear_day, "options": opt,
+                "smc": smc(bars), "vp_day": day_profile(mins, today),
+                "big": self._big_for_chart(m, sym, use_fut),
                 "near": {"symbol": m.future, "line": line_of(m.fut_min)},
                 "next": {"symbol": m.next_future, "line": line_of(m.nxt_min)}}
+
+    def _big_for_chart(self, m: Market, sym: str, use_fut: bool) -> list[dict]:
+        """Big trades to draw on the main chart: the future's own (on a future chart, at the trade price), or the near
+        future's placed at the index price of that moment (on the spot chart)."""
+        if use_fut:
+            return [dict(t, y=t["price"]) for t in self.big.today({sym})]
+        return [dict(t, y=t["spot"]) for t in self.big.today({m.future}) if t.get("spot")]
 
     # ------------------------------------------------------------------ live ticks
     def _on_tick(self, symbol: str, q: dict) -> None:
         self.ticks.add(symbol, q)
+        if q.get("ltp"):
+            self.last_ltp[symbol] = q["ltp"]
+        try:
+            m = self.markets.get(self.view.index)
+            spot = self.last_ltp.get(INDEXES[self.view.index].spot)
+            t = self.big.on_tick(symbol, q, spot)
+            if t and m:
+                self.broadcast({"type": "bigtrade", **t})
+        except Exception:
+            pass
         self.broadcast({"type": "tick", "symbol": symbol, "ltp": q.get("ltp"), "rx": q.get("rx")})
 
     # ------------------------------------------------------------------ link to the page
@@ -452,6 +477,7 @@ class DeskService:
             return
         m = self.markets.get(self.view.index)
         syms = [INDEXES[self.view.index].spot] + ([m.future] if m and m.future else []) + \
+               ([m.next_future] if m and m.next_future else []) + \
                [s for s in self.atm_symbols(self.view.index) if s]
         self.feed.subscribe(syms)
 

@@ -150,6 +150,40 @@ def bollinger(closes: Sequence[float], length: int = 20, mult: float = 2.0) -> d
     return out
 
 
+def day_profile(minutes: Sequence[Candle], today: date, rows: int = 70, area: float = 0.70) -> Optional[dict]:
+    """Today's volume profile from 09:15 (each 1-minute candle's volume spread over its high-low), with the point of
+    control (most traded price) and the 70% value area (VAH / VAL)."""
+    t = [c for c in minutes if local(c.ts).date() == today and c.volume > 0]
+    if not t:
+        return None
+    lo, hi = min(c.low for c in t), max(c.high for c in t)
+    if hi <= lo:
+        return None
+    step = (hi - lo) / rows
+    vol = [0.0] * rows
+    for c in t:
+        a = min(rows - 1, int((c.low - lo) / step))
+        z = min(rows - 1, int((c.high - lo) / step))
+        for i in range(a, z + 1):
+            vol[i] += c.volume / (z - a + 1)
+    total = sum(vol)
+    poc = max(range(rows), key=lambda i: vol[i])
+    va, s, up, dn = {poc}, vol[poc], poc + 1, poc - 1
+    while s < total * area and (up < rows or dn >= 0):
+        vu = vol[up] if up < rows else -1
+        vd = vol[dn] if dn >= 0 else -1
+        if vu >= vd:
+            va.add(up)
+            s += vu
+            up += 1
+        else:
+            va.add(dn)
+            s += vd
+            dn -= 1
+    return {"from_ts": t[0].ts, "low": lo, "step": step, "vol": vol, "va": sorted(va), "poc": lo + step * (poc + 0.5),
+            "vah": lo + step * (max(va) + 1), "val": lo + step * min(va)}
+
+
 def day_levels(minutes: Sequence[Candle], today: date) -> dict:
     """Day's open, previous session high / low / close, first 30-minute range (from 1-minute candles)."""
     days = sorted({local(c.ts).date() for c in minutes})
@@ -161,9 +195,10 @@ def day_levels(minutes: Sequence[Candle], today: date) -> dict:
     t = [c for c in minutes if local(c.ts).date() == today]
     if t:
         out["open"] = t[0].open
-        first = [c for c in t if local(c.ts).time() < time(9, 45)]
-        if first:
-            out.update(or_high=max(c.high for c in first), or_low=min(c.low for c in first))
+        for key, end in (("or5", time(9, 20)), ("or15", time(9, 30)), ("or", time(9, 45))):
+            first = [c for c in t if local(c.ts).time() < end]
+            if first:
+                out[f"{key}_high"], out[f"{key}_low"] = max(c.high for c in first), min(c.low for c in first)
     return out
 
 
@@ -177,4 +212,4 @@ def avg_daily_move(minutes: Sequence[Candle], today: date, sessions: int = 4) ->
     return sum(ranges) / len(ranges) if ranges else None
 
 
-__all__ = ["bollinger", "vwap_bands", "avg_daily_move", "buy_sell", "day_levels", "divergences", "ema", "kama", "split_volume", "vwap"]
+__all__ = ["day_profile", "bollinger", "vwap_bands", "avg_daily_move", "buy_sell", "day_levels", "divergences", "ema", "kama", "split_volume", "vwap"]

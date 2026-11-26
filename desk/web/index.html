@@ -8,7 +8,8 @@
   <b class="brand">KUNAL OPTIONS DESK</b>
   <select id="index"><option value="NIFTY">NIFTY</option><option value="BANKNIFTY">BANK NIFTY</option><option value="SENSEX">SENSEX</option></select>
   <select id="tf"><option value="1">1 min</option><option value="3">3 min</option><option value="5" selected>5 min</option><option value="15">15 min</option></select>
-  <select id="instrument"><option value="INDEX">Spot (futures volume)</option><option value="FUT">Near future</option></select>
+  <select id="instrument"><option value="INDEX">Spot (futures volume)</option><option value="FUT">Near future</option><option value="NEXT">Next future</option></select>
+  <select id="ctype" title="Candle type of the main chart"><option value="candles">Candles</option><option value="ha">Heikin-Ashi</option></select>
   <select id="broker" title="Data and orders come from this broker"><option value="FYERS">FYERS (live)</option><option value="DHAN" disabled>Dhan (coming later)</option></select>
   <label class="chk"><input type="checkbox" id="opt_panel" checked> Options panel</label>
   <span class="sp"></span>
@@ -26,7 +27,11 @@
       <label><input type="checkbox" data-t="vwap" checked> VWAP</label>
       <label><input type="checkbox" data-t="dayopen" checked> Day's open</label>
       <label><input type="checkbox" data-t="prevday" checked> Previous day H / L / C</label>
+      <label><input type="checkbox" data-t="first5"> First 5 min range</label>
+      <label><input type="checkbox" data-t="first15"> First 15 min range</label>
       <label><input type="checkbox" data-t="first30"> First 30 min range</label>
+      <label><input type="checkbox" data-t="vp_day" checked> Today's volume profile</label>
+      <label><input type="checkbox" data-t="big" checked> Big trades (₹50 L+)</label>
       <label><input type="checkbox" data-t="vwap1"> VWAP ±1 deviation</label>
       <label><input type="checkbox" data-t="vwap2"> VWAP ±2 deviation</label>
       <label><input type="checkbox" data-t="bb"> Bollinger Bands (20, 2)</label>
@@ -49,6 +54,11 @@
       <label><input type="checkbox" data-t="trapped" checked> Trapped positions</label>
       <label><input type="checkbox" data-t="maths" checked> Option maths</label>
       <label><input type="checkbox" data-t="hedging" checked> Hedging pressure</label></div>
+    <div class="trow"><span class="tlabel">SMC</span>
+      <label><input type="checkbox" data-t="smc_struct"> BOS / CHoCH</label>
+      <label><input type="checkbox" data-t="smc_ob"> Order blocks</label>
+      <label><input type="checkbox" data-t="smc_fvg"> Fair value gaps</label>
+      <label><input type="checkbox" data-t="smc_pd"> Premium / discount</label></div>
     <div class="trow"><span class="tlabel">MARKS</span>
       <label><input type="checkbox" data-t="m_lean" checked> Lean</label>
       <label><input type="checkbox" data-t="m_calls_added" checked> Calls added</label>

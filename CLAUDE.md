@@ -31,6 +31,13 @@
   profile (opt_vp / opt_dp). Hover boxes are see-through (~35%, blur, text shadow); flow pane has one too.
   Chain: Value column (OI x lot x premium). Short Cov arrows only when each of the 3+ strikes moved >= Rs 50 lakh in
   15 min (analytics.BIG_MOVE). Trapped list shows "At stake" (lots x lot x built price) and the loss.
+- Owner 26 Nov 2026 (3rd round): VWAP bands stronger (±1 cyan, ±2 orange, dashed); chart type Candles / Heikin-Ashi
+  (display only, indicators on real prices); instrument Spot / Near future / Next future. Opening ranges 5 / 15 / 30
+  min. Today's volume profile from 09:15 (flow.day_profile, sky blue, 70% VA). Big trades (desk/bigtrades.py): one
+  trade >= Rs 50 lakh, side from the bid/ask a moment before (tick rule in between), counted once via the day volume;
+  futures' trades drawn at the index price on the spot chart; option charts show their own. SMC (desk/smc.py):
+  BOS / CHoCH, order blocks (last 3 each way, last few sessions, <= 0.6% tall), today's open FVGs (last 4),
+  premium / discount. Guide for the owner: docs/DESK_GUIDE.pdf (screens from the demo).
 - OPTION ARBITRAGE (owner 26 Nov 2026): docs/OPTION_ARBITRAGE.md, package arbitrage/ (core, costs, universe, history,
   report, live), arb_history.py + arbitrage_history.bat (1 year, resumable cache data/arbitrage/cache.sqlite, newest
   first, stops at 90k FYERS calls), arb_live.py + arbitrage_live.bat (market hours, option ASK vs future bid/ask).

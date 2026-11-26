@@ -74,6 +74,7 @@ class Feed:
         self.last_tick[sym] = _time.monotonic()
         self.on_quote_cb(sym, {"ltp": float(msg["ltp"]), "bid": float(msg.get("bid_price") or 0),
                                "ask": float(msg.get("ask_price") or 0), "t": msg.get("last_traded_time"),
+                               "ltq": msg.get("last_traded_qty"), "vol": msg.get("vol_traded_today"),
                                "src": "ws", "rx": _time.time()})
 
     def _start_orders(self) -> None:

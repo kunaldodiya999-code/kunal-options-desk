@@ -53,9 +53,9 @@
   const vol = main.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
   main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   const vwapS = line(main, "#2962ff"), bvwS = line(main, "#089981", 1, 2), svwS = line(main, "#f23645", 1, 2);
-  const u1S = line(main, "rgba(91,140,255,.55)", 1, 2), l1S = line(main, "rgba(91,140,255,.55)", 1, 2);
-  const u2S = line(main, "rgba(91,140,255,.35)", 1, 1), l2S = line(main, "rgba(91,140,255,.35)", 1, 1);
-  const bbU = line(main, "rgba(255,183,77,.55)", 1), bbL = line(main, "rgba(255,183,77,.55)", 1), bbM = line(main, "rgba(255,183,77,.35)", 1, 2);
+  const u1S = line(main, "rgba(38,198,218,.85)", 2, 2), l1S = line(main, "rgba(38,198,218,.85)", 2, 2);
+  const u2S = line(main, "rgba(255,167,38,.8)", 2, 2), l2S = line(main, "rgba(255,167,38,.8)", 2, 2);
+  const bbU = line(main, "rgba(179,157,219,.75)", 1), bbL = line(main, "rgba(179,157,219,.75)", 1), bbM = line(main, "rgba(179,157,219,.45)", 1, 2);
   const ema1S = line(main, "#ff9800", 1), ema2S = line(main, "#9c27b0", 1);
   const futLine = color => main.addLineSeries({ color, lineWidth: 2, lastValueVisible: true, priceLineVisible: false,
     crosshairMarkerVisible: false });
@@ -90,7 +90,7 @@
       (o.vwapNow ? ` · <span class="b">VWAP ${fmt(o.vwapNow)}</span>` : "");
   }
   function setOpt(o, data) {
-    o.symbol = data ? data.symbol : ""; o.bars = data ? data.bars : [];
+    o.symbol = data ? data.symbol : ""; o.bars = data ? data.bars : []; o.big = data && data.big ? data.big : [];
     const t = o.bars.map(b => b.t + SHIFT);
     o.candle.setData(o.bars.map((b, i) => ({ time: t[i], open: b.o, high: b.h, low: b.l, close: b.c })));
     o.volS.setData(o.bars.map((b, i) => ({ time: t[i], value: b.v, color: b.c >= b.o ? "rgba(8,153,129,.35)" : "rgba(242,54,69,.35)" })));
@@ -107,6 +107,13 @@
     const w = el.clientWidth, h = el.clientHeight, dpr = window.devicePixelRatio || 1;
     cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px";
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    if (T("big") && o.bars.length) for (const t of o.big || []) {
+      const x = o.c.timeScale().timeToCoordinate(bucket(t.ts, B ? B.tf : 1)), y = o.candle.priceToCoordinate(t.price);
+      if (x === null || y === null) continue;
+      const r = Math.max(4, Math.min(14, 3 + 3 * Math.sqrt(t.value / 50e5))), buy = t.side === "buy";
+      ctx.fillStyle = buy ? "rgba(8,153,129,.28)" : "rgba(242,54,69,.28)"; ctx.strokeStyle = buy ? "rgba(8,153,129,.9)" : "rgba(242,54,69,.9)";
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
     if (!o.bars.length || (!T("opt_vp") && !T("opt_dp"))) return;
     const lo = Math.min(...o.bars.map(b => b.l)), hi = Math.max(...o.bars.map(b => b.h));
     if (!(hi > lo)) return;
@@ -171,10 +178,16 @@
   };
   const series = (arr, times) => arr.map((v, i) => v === null ? null : { time: times[i], value: v }).filter(Boolean);
 
+  // Heikin-Ashi (display only: every indicator still uses the real prices)
+  const heikin = bars => { const out = []; let po = null, pc = null;
+    for (const b of bars) { const c = (b.o + b.h + b.l + b.c) / 4, o = po === null ? (b.o + b.c) / 2 : (po + pc) / 2;
+      out.push({ t: b.t, o, h: Math.max(b.h, o, c), l: Math.min(b.l, o, c), c }); po = o; pc = c; }
+    return out; };
+  const shown = bars => prefs.ctype === "ha" ? heikin(bars) : bars;
   function renderBars(d) {
     B = d;
     const times = d.bars.map(b => b.t + SHIFT);
-    candles.setData(d.bars.map((b, i) => ({ time: times[i], open: b.o, high: b.h, low: b.l, close: b.c })));
+    candles.setData(shown(d.bars).map((b, i) => ({ time: times[i], open: b.o, high: b.h, low: b.l, close: b.c })));
     vol.setData(T("volume") ? d.bars.map((b, i) => ({ time: times[i], value: b.v,
       color: b.c >= b.o ? "rgba(8,153,129,.45)" : "rgba(242,54,69,.45)" })) : []);
     vwapS.setData(T("vwap") ? series(d.vwap, times) : []);
@@ -209,7 +222,7 @@
     const tot = (b.bv + b.sv) || 1, day = (B.bull_day + B.bear_day) || 1;
     const fut = (key, f, color) => T(key) && f && f.symbol && f.line.length ?
       ` · <span style="color:${color}">${esc(f.symbol)} ${fmt(f.line[f.line.length - 1][1])}</span>` : "";
-    $("legend").innerHTML = `<b>${esc(B.symbol)} · ${B.tf} min</b>${fut("near_line", B.near, "#ff6d00")}${fut("next_line", B.next, "#00acc1")}<br>O ${fmt(b.o)} H ${fmt(b.h)} L ${fmt(b.l)} C ${fmt(b.c)} · Vol ${lk(b.v)}` +
+    $("legend").innerHTML = `<b>${esc(B.symbol)} · ${B.tf} min${prefs.ctype === "ha" ? " · Heikin-Ashi (values below are real prices)" : ""}</b>${fut("near_line", B.near, "#ff6d00")}${fut("next_line", B.next, "#00acc1")}<br>O ${fmt(b.o)} H ${fmt(b.h)} L ${fmt(b.l)} C ${fmt(b.c)} · Vol ${lk(b.v)}` +
       (T("bullbear") ? ` (<span class="g">bull ${lk(b.bv)} ${Math.round(b.bv / tot * 100)}%</span> · <span class="r">bear ${lk(b.sv)} ${Math.round(b.sv / tot * 100)}%</span>)` : "") +
       (T("vwap") ? `<br><span class="b">VWAP ${fmt(B.vwap[i < 0 ? B.vwap.length - 1 : i])}</span>` : "") +
       (T("bullbear") ? `<br>Today so far: <span class="g">bull volume ${lk(B.bull_day)} (${Math.round(B.bull_day / day * 100)}%)</span> · <span class="r">bear volume ${lk(B.bear_day)} (${Math.round(B.bear_day / day * 100)}%)</span>` : "");
@@ -247,6 +260,8 @@
       const L = B.levels;
       if (T("dayopen")) add(L.open, "#787b86", "open");
       if (T("prevday")) { add(L.prev_high, "#787b86", "prev high"); add(L.prev_close, "#787b86", "prev close"); add(L.prev_low, "#787b86", "prev low"); }
+      if (T("first5")) { add(L.or5_high, "#26c6da", "5m high"); add(L.or5_low, "#26c6da", "5m low"); }
+      if (T("first15")) { add(L.or15_high, "#7e57c2", "15m high"); add(L.or15_low, "#7e57c2", "15m low"); }
       if (T("first30")) { add(L.or_high, "#5b8cff", "30m high"); add(L.or_low, "#5b8cff", "30m low"); }
     }
     if (A && !A.empty) for (const l of A.levels) {
@@ -283,7 +298,8 @@
   main.subscribeCrosshairMove(p => {
     const tip = $("tip");
     legend(p && p.time);
-    const hit = p && p.point && dotHits.find(d => Math.abs(d.x - p.point.x) <= 8 && Math.abs(d.y - p.point.y) <= 8);
+    const hit = p && p.point && (dotHits.find(d => Math.abs(d.x - p.point.x) <= 8 && Math.abs(d.y - p.point.y) <= 8) ||
+      bigHits.find(d => Math.hypot(d.x - p.point.x, d.y - p.point.y) <= d.r + 2));
     const texts = hit ? [hit.text] : p && p.time && markIndex[p.time];
     if (!texts || !p.point) { tip.style.display = "none"; return; }
     tip.innerHTML = texts.map(esc).join("<br><br>");
@@ -311,11 +327,82 @@
   // ------------------------------------------------------------------ OI profile (Total OI and / or OI change)
   const shift = () => (prefs.align && A && !A.empty && B && B.bars.length && A.live.forward) ?
     (B.bars[B.bars.length - 1].c - A.live.forward) : 0;
+  let bigHits = [];
+  function drawOverlays(ctx, w, h) {
+    const ts = main.timeScale(), right = w - main.priceScale("right").width();
+    const X = t => { const x = ts.timeToCoordinate(t + SHIFT); return x === null ? null : x; };
+    const Y = p => candles.priceToCoordinate(p);
+    const first = B.bars.length ? B.bars[0].t : 0, x0 = t => { const x = X(Math.max(t, first)); return x === null ? 0 : x; };
+    const lastX = B.bars.length ? (X(B.bars[B.bars.length - 1].t) ?? right) : right, endX = Math.min(right, lastX + 24);
+    const box = (t0, t1, top, bot, fill, stroke, label) => {
+      const a = x0(t0), b = t1 ? (X(t1) ?? endX) : endX, y1 = Y(top), y2 = Y(bot);
+      if (y1 === null || y2 === null || b < 0) return;
+      ctx.fillStyle = fill; ctx.fillRect(a, Math.min(y1, y2), Math.max(1, b - a), Math.abs(y2 - y1));
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.strokeRect(a + .5, Math.min(y1, y2) + .5, Math.max(1, b - a), Math.abs(y2 - y1)); }
+      if (label) { ctx.fillStyle = stroke || fill; ctx.font = "10px sans-serif"; ctx.fillText(label, a + 3, Math.min(y1, y2) + 10); }
+    };
+    const S = B.smc || {};
+    if (T("smc_pd") && S.pd) {
+      const r = S.pd.top - S.pd.bottom;
+      box(S.pd.from_ts, null, S.pd.top, S.pd.top - r * 0.25, "rgba(242,54,69,.05)", null, null);
+      box(S.pd.from_ts, null, S.pd.bottom + r * 0.25, S.pd.bottom, "rgba(8,153,129,.05)", null, null);
+      const y = Y(S.pd.eq), a = x0(S.pd.from_ts);
+      ctx.font = "10px sans-serif";
+      ctx.fillStyle = "rgba(242,54,69,.75)"; const yt = Y(S.pd.top); if (yt !== null) ctx.fillText("Premium", a + 3, yt + 11);
+      ctx.fillStyle = "rgba(8,153,129,.8)"; const yb = Y(S.pd.bottom); if (yb !== null) ctx.fillText("Discount", a + 3, yb - 4);
+      if (y !== null) { ctx.strokeStyle = "rgba(149,152,161,.6)"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(a, y); ctx.lineTo(endX, y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(149,152,161,.9)"; ctx.fillText("Equilibrium", a + 3, y - 3); }
+    }
+    if (T("smc_fvg")) for (const g of S.fvgs || [])
+      box(g.from_ts, g.end_ts, g.top, g.bottom, g.dir === "bull" ? "rgba(41,98,255,.09)" : "rgba(255,152,0,.09)", null, "FVG");
+    if (T("smc_ob")) for (const o of S.obs || [])
+      box(o.from_ts, o.end_ts, o.top, o.bottom, o.dir === "bull" ? "rgba(8,153,129,.10)" : "rgba(242,54,69,.10)",
+        o.dir === "bull" ? "rgba(8,153,129,.6)" : "rgba(242,54,69,.6)", o.dir === "bull" ? "Bull OB" : "Bear OB");
+    if (T("smc_struct")) for (const e of S.structure || []) {
+      const a = X(e.from_ts), b = X(e.to_ts), y = Y(e.price);
+      if (b === null || y === null) continue;
+      const col = e.dir === "up" ? "rgba(8,153,129,.85)" : "rgba(242,54,69,.85)", xa = a === null ? 0 : a;
+      ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash(e.kind === "CHoCH" ? [] : [4, 3]);
+      ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(b, y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; ctx.font = e.kind === "CHoCH" ? "bold 10px sans-serif" : "10px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(e.kind, (xa + b) / 2, e.dir === "up" ? y - 4 : y + 11); ctx.textAlign = "left";
+    }
+    const vp = B.vp_day;
+    if (T("vp_day") && vp) {                         // today's volume profile, anchored at today's first candle
+      const a = X(vp.from_ts);
+      if (a !== null) {
+        const width = Math.max(40, Math.min(right * 0.22, right - a - 10)), maxV = Math.max(...vp.vol), va = new Set(vp.va);
+        vp.vol.forEach((v, i) => {
+          const y1 = Y(vp.low + vp.step * (i + 1)), y2 = Y(vp.low + vp.step * i);
+          if (y1 === null || y2 === null) return;
+          ctx.fillStyle = va.has(i) ? "rgba(135,206,235,.30)" : "rgba(135,206,235,.12)";
+          ctx.fillRect(a, Math.min(y1, y2) + .5, v / maxV * width, Math.max(1, Math.abs(y2 - y1) - 1));
+        });
+        for (const [p, name] of [[vp.vah, "VAH"], [vp.poc, "POC"], [vp.val, "VAL"]]) {
+          const y = Y(p); if (y === null) continue;
+          ctx.strokeStyle = name === "POC" ? "rgba(135,206,235,.95)" : "rgba(135,206,235,.6)"; ctx.setLineDash(name === "POC" ? [] : [3, 3]);
+          ctx.beginPath(); ctx.moveTo(a, y); ctx.lineTo(a + width, y); ctx.stroke(); ctx.setLineDash([]);
+          ctx.fillStyle = "rgba(135,206,235,.95)"; ctx.font = "10px sans-serif"; ctx.fillText(`${name} ${fmt(p, 0)}`, a + width + 3, y + 3);
+        }
+      }
+    }
+    if (T("big")) for (const t of B.big || []) {     // big trades: circle size grows with the rupee value
+      const x = X(bucket(t.ts, B.tf) - SHIFT), y = Y(t.y);
+      if (x === null || y === null) continue;
+      const r = Math.max(5, Math.min(18, 4 + 3 * Math.sqrt(t.value / 50e5)));
+      const buy = t.side === "buy";
+      ctx.fillStyle = buy ? "rgba(8,153,129,.28)" : "rgba(242,54,69,.28)"; ctx.strokeStyle = buy ? "rgba(8,153,129,.9)" : "rgba(242,54,69,.9)";
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.lineWidth = 1.2; ctx.stroke();
+      bigHits.push({ x, y, r, text: `BIG ${buy ? "BUY" : "SELL"} (hit the ${buy ? "offer" : "bid"}) · ${t.symbol} · ${fmt(t.qty, 0)} qty @ ${fmt(t.price)} = ₹${lk(t.value)} · ${new Date(t.ts * 1000).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })}` });
+    }
+  }
   function drawProfile() {
     const cv = $("profile"), el = $("main");
     const w = el.clientWidth, h = el.clientHeight, dpr = window.devicePixelRatio || 1;
     cv.style.top = el.offsetTop + "px"; cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px";
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    bigHits = [];
+    if (B) drawOverlays(ctx, w, h);
     // the profiles, right to left, each in its own column so they never overlap (owner 26 Nov)
     const PROFILES = [["oi_total", "OI", "call_oi", "put_oi"], ["oi_change", "OI chg", "call_ch", "put_ch"],
       ["prof_dex", "Delta", "call_dex", "put_dex"], ["prof_gex", "GEX", "call_gex", "put_gex"]].filter(c => T(c[0]));
@@ -563,6 +650,13 @@
     else { drawProfile(); }
   }
 
+  function onBig(t) {
+    if (!B) return;
+    if (B.instrument === "INDEX" && A && !A.empty && t.symbol === A.live.future && t.spot) { (B.big = B.big || []).push(Object.assign({ y: t.spot }, t)); drawProfile(); }
+    else if (t.symbol === B.symbol) { (B.big = B.big || []).push(Object.assign({ y: t.price }, t)); drawProfile(); }
+    for (const k of ["ce", "pe"]) if (OPT[k].symbol === t.symbol) { (OPT[k].big = OPT[k].big || []).push(t); drawOptProfile(OPT[k]); }
+  }
+
   // ------------------------------------------------------------------ live ticks
   function onTick(m) {
     if (B && m.symbol === B.symbol && lastCandle) {
@@ -570,7 +664,13 @@
       const lc = lastCandle;
       if (lc.t + SHIFT === t) { lc.h = Math.max(lc.h, m.ltp); lc.l = Math.min(lc.l, m.ltp); lc.c = m.ltp; }
       else if (t > lc.t + SHIFT) { Object.assign(lc, { t: t - SHIFT, o: m.ltp, h: m.ltp, l: m.ltp, c: m.ltp }); }
-      candles.update({ time: lc.t + SHIFT, open: lc.o, high: lc.h, low: lc.l, close: lc.c });
+      if (prefs.ctype === "ha" && B.bars.length) {
+        const all = B.bars.slice(0, -1).concat([lc]); B.bars = all;
+        const hb = heikin(all.slice(-2)), x = hb[hb.length - 1];
+        const prev = heikin(all)[all.length - 2];
+        const o = prev ? (prev.o + prev.c) / 2 : x.o, c = (lc.o + lc.h + lc.l + lc.c) / 4;
+        candles.update({ time: lc.t + SHIFT, open: o, high: Math.max(lc.h, o, c), low: Math.min(lc.l, o, c), close: c });
+      } else candles.update({ time: lc.t + SHIFT, open: lc.o, high: lc.h, low: lc.l, close: lc.c });
       const el = $("lv_fut"); if (el) el.textContent = fmt(m.ltp);
     }
     if (A && !A.empty && m.symbol === A.live.future) { const el = $("lv_near"); if (el) el.textContent = fmt(m.ltp); }
@@ -591,6 +691,7 @@
       const m = JSON.parse(ev.data);
       if (m.type === "tick") onTick(m);
       else if (m.type === "bars") { if (m.index === view.index) renderBars(m); }
+      else if (m.type === "bigtrade") onBig(m);
       else if (m.type === "analytics") { if (m.index === view.index) { renderAnalytics(m); $("status").textContent = "live · FYERS"; } }
       else if (m.type === "login") login(m);
       else if (m.type === "status") $("status").textContent = m.status;
@@ -612,6 +713,8 @@
 
   // ------------------------------------------------------------------ controls
   $("index").onchange = () => { view.index = $("index").value; view.strike = null; renderBars.fitted = false; sendView(); };
+  $("ctype").value = prefs.ctype || "candles";
+  $("ctype").onchange = () => { prefs.ctype = $("ctype").value; store.set("prefs", prefs); if (B) renderBars(B); };
   $("tf").onchange = () => { view.tf = Number($("tf").value); renderBars.fitted = false; sendView(); };
   $("instrument").onchange = () => { view.instrument = $("instrument").value; renderBars.fitted = false; sendView(); };
   $("each").onchange = () => { view.each_side = Number($("each").value); sendView(); };
