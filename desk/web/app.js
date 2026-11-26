@@ -223,11 +223,14 @@
     const w = el.clientWidth, h = el.clientHeight, dpr = window.devicePixelRatio || 1;
     cv.style.top = el.offsetTop + "px"; cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px";
     const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
-    const showT = T("oi_total"), showC = T("oi_change");
+    // the profiles, right to left, each in its own column so they never overlap (owner 26 Nov)
+    const PROFILES = [["oi_total", "OI", "call_oi", "put_oi"], ["oi_change", "OI chg", "call_ch", "put_ch"],
+      ["prof_dex", "Delta", "call_dex", "put_dex"], ["prof_gex", "GEX", "call_gex", "put_gex"]].filter(c => T(c[0]));
     dotHits = [];
     if (!A || A.empty) return;
-    const right = w - main.priceScale("right").width() - 4, pw = Number(prefs.pw) || 160, gap = 10;
-    const dotX = (showT && showC ? right - pw - gap - pw * 0.75 : showT || showC ? right - pw : right) - 12;
+    const right = w - main.priceScale("right").width() - 4, gap = 10, n = PROFILES.length;
+    const colW = n ? Math.max(40, Math.min(Number(prefs.pw) || 160, (right * 0.55 - gap * (n - 1)) / n)) : 0;
+    const dotX = (n ? right - n * (colW + gap) + gap : right) - 14;
     const dot = (price, color, text, diamond) => {
       const y = candles.priceToCoordinate(price + shift());
       if (y === null || y < 4 || y > h - 4) return;
@@ -243,14 +246,11 @@
         `TRAPPED ${r.option.toUpperCase()} ${r.who.toUpperCase()} at ${fmt(r.strike, 0)}: ${fmt(r.lots, 0)} lots built at about ${fmt(r.built_at)}, now ${fmt(r.now)}, ${Math.round(r.under_water * 100)}% under water (about ₹${lk(r.money)}).`);
     if (T("hedging") && A.hedging.heaviest) dot(A.hedging.heaviest, "#7b1fa2",
       `HEAVIEST HEDGING at ${fmt(A.hedging.heaviest, 0)}: a 50-point rise makes option writers buy about ${lk(A.hedging.buy_on_rise)} lots; a fall makes them sell about ${lk(A.hedging.sell_on_fall)}.`, true);
-    if (!A.profile.length || (!showT && !showC)) return;
+    if (!A.profile.length || !n) return;
     const ys = A.profile.map(p => candles.priceToCoordinate(p.strike + shift()));
     const vis = A.profile.map((p, i) => [p, ys[i]]).filter(([p, y]) => y !== null && y > 0 && y < h);
     if (!vis.length) return;
     const step = vis.length > 1 ? Math.abs(vis[1][1] - vis[0][1]) : 20, th = Math.max(2, Math.min(9, step * 0.38));
-    const maxT = Math.max(...vis.map(([p]) => Math.max(p.call_oi, p.put_oi)), 1);
-    const maxC = Math.max(...vis.map(([p]) => Math.max(Math.abs(p.call_ch), Math.abs(p.put_ch))), 1);
-    const totX = right, chX = showT ? right - pw - gap : right;
     ctx.font = "10px sans-serif"; ctx.textBaseline = "middle";
     const bar = (xr, len, y, color, hollow, label) => {
       const x = xr - len;
@@ -258,20 +258,21 @@
       else { ctx.fillStyle = color; ctx.fillRect(x, y, len, th); }
       if (prefs.pv && len > 34 && th >= 7) { ctx.fillStyle = hollow ? color : "#fff"; ctx.fillText(label, x + 3, y + th / 2 + .5); }
     };
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--muted");
-    if (showT) ctx.fillText("OI", totX - 14, 8);
-    if (showC) ctx.fillText("OI chg", chX - 34, 8);
-    for (const [p, y] of vis) {
-      if (showT) {
-        bar(totX, p.call_oi / maxT * pw, y - th, "rgba(242,54,69,.75)", false, lk(p.call_oi));
-        bar(totX, p.put_oi / maxT * pw, y, "rgba(8,153,129,.75)", false, lk(p.put_oi));
+    const muted = getComputedStyle(document.documentElement).getPropertyValue("--muted");
+    PROFILES.forEach(([key, title, ck, pk], i) => {
+      const xr = right - i * (colW + gap);
+      const max = Math.max(...vis.map(([p]) => Math.max(Math.abs(p[ck] || 0), Math.abs(p[pk] || 0))), 1e-9);
+      ctx.fillStyle = muted; ctx.textAlign = "right"; ctx.fillText(title, xr, 8); ctx.textAlign = "left";
+      ctx.strokeStyle = "rgba(120,123,134,.25)"; ctx.beginPath(); ctx.moveTo(xr + .5, 14); ctx.lineTo(xr + .5, h); ctx.stroke();
+      for (const [p, y] of vis) {
+        const c = p[ck] || 0, u = p[pk] || 0;
+        const label = v => key === "oi_change" || key === "prof_dex" ? sg(v) : lk(v);
+        const hollowC = key === "oi_change" && c < 0, hollowP = key === "oi_change" && u < 0;
+        const alpha = key === "oi_total" ? .75 : key === "oi_change" ? .45 : .6;
+        bar(xr, Math.abs(c) / max * colW, y - th, hollowC ? "rgba(242,54,69,.9)" : `rgba(242,54,69,${alpha})`, hollowC, label(c));
+        bar(xr, Math.abs(u) / max * colW, y, hollowP ? "rgba(8,153,129,.9)" : `rgba(8,153,129,${alpha})`, hollowP, label(u));
       }
-      if (showC) {
-        const cw = pw * (showT ? 0.75 : 1);
-        bar(chX, Math.abs(p.call_ch) / maxC * cw, y - th, p.call_ch >= 0 ? "rgba(242,54,69,.45)" : "rgba(242,54,69,.9)", p.call_ch < 0, sg(p.call_ch));
-        bar(chX, Math.abs(p.put_ch) / maxC * cw, y, p.put_ch >= 0 ? "rgba(8,153,129,.45)" : "rgba(8,153,129,.9)", p.put_ch < 0, sg(p.put_ch));
-      }
-    }
+    });
   }
   new ResizeObserver(() => { drawProfile(); drawStrip(); }).observe($("main"));
 
@@ -317,6 +318,7 @@
     d.trapped.rows.slice(0, 6).forEach(r => lv.push(`<div class="lvl"><b class="trap">● Trapped ${esc(r.option.toLowerCase())} ${esc(r.who)} ${fmt(r.strike, 0)}</b>` +
       `<span>${fmt(r.lots, 0)} lots · ${Math.round(r.under_water * 100)}% down · built ${fmt(r.built_at)}, now ${fmt(r.now)}</span></div>`));
     $("levels").innerHTML = lv.join("") || `<span class="muted">Nothing yet.</span>`;
+    renderPricing(d.pricing || {});
     const L = d.live;
     $("live").innerHTML = `<span>${esc((B && B.symbol) || L.future || "Chart")}</span><span class="big" id="lv_fut">${fmt(lastCandle ? lastCandle.c : null)}</span>` +
       `<span>ATM strike</span><b>${fmt(L.atm, 0)}</b><span>${esc(L.ce || "ATM call")}</span><b id="lv_ce">${fmt(L.ce_ltp)}</b>` +
@@ -327,6 +329,22 @@
     sel.value = cur;
     priceLines(); marks(); drawProfile(); applyToggles(true);
   }
+  function renderPricing(q) {
+    if (!q.ready) { $("pricing").innerHTML = `<span class="muted">Waiting for prices${q.error ? " (" + esc(q.error) + ")" : ""}.</span>`; return; }
+    const tone = q.bias === "CALL SIDE" ? "pos" : q.bias === "PUT SIDE" ? "neg" : "muted";
+    const dear = q.dear === "calls" ? `<b class="neg">Calls are expensive</b>, puts cheap` : q.dear === "puts" ?
+      `<b class="pos">Puts are expensive</b>, calls cheap` : q.dear === "even" ? "Calls and puts priced evenly" : "Waiting for the future's price";
+    const rng = v => v ? `₹${fmt(Math.max(0, v[0]), 0)}–${fmt(Math.max(0, v[1]), 0)}` : "-";
+    const rows = (q.horizons || []).map(h => `<tr><td>${esc(h.label)}</td><td>±${fmt(h.move, 0)}</td><td class="pos">${rng(h.ce)}</td><td class="neg">${rng(h.pe)}</td></tr>`).join("");
+    $("pricing").innerHTML = `<div class="bias ${tone}">Bias: ${esc(q.bias)}</div><div>${dear}` +
+      (q.parity_gap !== undefined ? ` <span class="muted">(${q.parity_gap >= 0 ? "+" : ""}${fmt(q.parity_gap, 1)} pts: options' price ${fmt(q.options_forward)} vs fair ${fmt(q.fair_forward)})</span>` : "") + `</div>` +
+      `<ul class="why">${(q.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul>` +
+      `<div class="muted">Volatility used ${q.sigma ? fmt(q.sigma * 100, 1) + "%" : "-"} (ATM implied ${q.iv ? fmt(q.iv * 100, 1) + "%" : "-"}, last hour ${q.realized ? fmt(q.realized * 100, 1) + "%" : "-"})</div>` +
+      `<table class="mv"><tr><th></th><th>Index</th><th>${fmt(q.atm, 0)} CE</th><th>${fmt(q.atm, 0)} PE</th></tr>${rows}</table>` +
+      `<div class="muted small">Option ₹ = gain if the index moves half to one expected move in its favour, after time decay. ` +
+      `About 2 times in 3 the index stays inside ±one expected move. Maths, not a forecast of direction.</div>`;
+  }
+
   function renderChain(d) {
     const g = prefs.greeks, rows = d.chain;
     const mx = k => Math.max(...rows.map(r => Math.max(Math.abs(r.call[k] || 0), Math.abs(r.put[k] || 0))), 1e-9);

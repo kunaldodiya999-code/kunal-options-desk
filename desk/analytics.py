@@ -484,6 +484,115 @@ def hedging(snap: Snapshot, move: float = 50.0) -> dict:
             "sell_on_fall": sell_on_fall, "writers_delta": now, "rows": rows, "cards": cards}
 
 
+# ------------------------------------------------------------------ calls vs puts: which side is dear, the bias, the move
+TRADING_MINUTES_YEAR = 252 * 375
+
+
+def realized_vol(closes: list[float]) -> Optional[float]:
+    """Annualised volatility from 1-minute closes (trading minutes)."""
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0]
+    if len(rets) < 15:
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((x - mean) ** 2 for x in rets) / (len(rets) - 1)
+    return math.sqrt(var * TRADING_MINUTES_YEAR)
+
+
+def _rr25(snap: Snapshot) -> Optional[tuple[float, float]]:
+    """IV of the call nearest delta 0.25 and of the put nearest delta -0.25 (the '25-delta risk reversal')."""
+    calls = [r.call for r in snap.rows if r.call.delta is not None and r.call.iv and 0.05 < r.call.delta < 0.5]
+    puts = [r.put for r in snap.rows if r.put.delta is not None and r.put.iv and -0.5 < r.put.delta < -0.05]
+    if not calls or not puts:
+        return None
+    c = min(calls, key=lambda x: abs(x.delta - 0.25))
+    p = min(puts, key=lambda x: abs(x.delta + 0.25))
+    return c.iv, p.iv
+
+
+def _option_gain(leg, move: float, minutes: float) -> Optional[float]:
+    """Rupees an option gains when the index moves ``move`` points its way over ``minutes`` of trading:
+    |delta| x move + 1/2 gamma x move^2 - theta for that time (theta is per calendar day; ~375 trading minutes)."""
+    if leg.delta is None or leg.gamma is None or leg.theta is None:
+        return None
+    return abs(leg.delta) * move + 0.5 * leg.gamma * move * move + leg.theta * minutes / 375
+
+
+def pricing(snap: Snapshot, *, fut_price: Optional[float], spot: Optional[float], fut_expiry_ts: Optional[int],
+            at_open: Optional[Snapshot], realized: Optional[float], lean: str, now_ts: int) -> dict:
+    """Which side is expensive, which side the bias is on, and how far the ATM call / put should move.
+
+    1. Calls vs puts (put-call parity): the options' own forward (strike + call - put at ATM) against the fair
+       forward from the futures (index + futures premium scaled to this expiry). Options' forward HIGHER = calls
+       are dear / puts cheap (people pay up for the upside); LOWER = puts are dear.
+    2. Skew: implied vol of the 25-delta call minus the 25-delta put, now and at the open (rising = calls gaining).
+    3. Open interest lean of the last 15 minutes (What the options are saying).
+    Bias = the side at least two of the three agree on (else neutral).
+    Expected move: index x volatility x sqrt(minutes / trading minutes in a year); volatility = average of the ATM
+    implied vol and the last hour's realised vol. Option rupees = delta x move + 1/2 gamma x move^2 - theta.
+    Half to one expected move = the range shown (about 2 times in 3 the index stays inside one expected move)."""
+    S = snap.spot or snap.forward
+    row = atm_row(snap)
+    out: dict = {"ready": bool(S and row and snap.forward)}
+    if not out["ready"]:
+        return out
+    votes, reasons = 0, []
+    # 1 parity
+    fair = None
+    if fut_price and spot:
+        fair = fut_price
+        if fut_expiry_ts and snap.years > 0:
+            left_fut = max(60, fut_expiry_ts - now_ts)
+            left_opt = snap.years * 365 * 86400
+            fair = spot + (fut_price - spot) * min(1.0, left_opt / left_fut)
+    if fair:
+        gap = snap.forward - fair
+        band = max(0.5, S * 0.0002)
+        dear = "calls" if gap > band else "puts" if gap < -band else "even"
+        votes += 1 if dear == "calls" else -1 if dear == "puts" else 0
+        out.update(parity_gap=gap, fair_forward=fair, options_forward=snap.forward, dear=dear)
+    # 2 skew
+    rr, rr0 = _rr25(snap), _rr25(at_open) if at_open else None
+    if rr:
+        now_rr = (rr[0] - rr[1]) * 100
+        out.update(call_iv25=rr[0] * 100, put_iv25=rr[1] * 100, rr=now_rr)
+        if rr0:
+            open_rr = (rr0[0] - rr0[1]) * 100
+            out["rr_open"] = open_rr
+            ch = now_rr - open_rr
+            if abs(ch) >= 0.3:
+                votes += 1 if ch > 0 else -1
+            reasons.append(f"25-delta skew {now_rr:+.1f} vol pts (open {open_rr:+.1f}): "
+                           + ("calls gaining" if ch >= 0.3 else "puts gaining" if ch <= -0.3 else "little change"))
+        else:
+            reasons.append(f"25-delta skew {now_rr:+.1f} vol pts (call IV {rr[0] * 100:.1f}%, put IV {rr[1] * 100:.1f}%)")
+    # 3 OI lean
+    votes += 1 if lean == "BULLISH" else -1 if lean == "BEARISH" else 0
+    reasons.append(f"Open interest lean (15 min): {lean}")
+    out["bias"] = "CALL SIDE" if votes >= 2 else "PUT SIDE" if votes <= -2 else "NEUTRAL"
+    out["votes"], out["reasons"] = votes, reasons
+    # expected move
+    ivs = [x for x in (row.call.iv, row.put.iv) if x]
+    iv = sum(ivs) / len(ivs) if ivs else None
+    sig = [x for x in (iv, realized) if x]
+    sigma = sum(sig) / len(sig) if sig else None
+    close = datetime.fromtimestamp(now_ts, IST).replace(hour=15, minute=30, second=0)
+    left_today = max(0.0, (close.timestamp() - now_ts) / 60)
+    out.update(iv=iv, realized=realized, sigma=sigma, atm=row.strike, ce=row.call.symbol, pe=row.put.symbol,
+               ce_price=row.call.ltp, pe_price=row.put.ltp)
+    horizons = []
+    for label, minutes in (("next 30 min", 30), ("next 60 min", 60), ("rest of today", left_today)):
+        if not sigma or minutes < 5:
+            continue
+        mv = S * sigma * math.sqrt(minutes / TRADING_MINUTES_YEAR)
+        h = {"label": label, "minutes": round(minutes), "move": mv}
+        for side, leg in (("ce", row.call), ("pe", row.put)):
+            lo, hi = _option_gain(leg, mv / 2, minutes), _option_gain(leg, mv, minutes)
+            h[side] = [lo, hi] if lo is not None and hi is not None else None
+        horizons.append(h)
+    out["horizons"] = horizons
+    return out
+
+
 # ------------------------------------------------------------------ OI marks for the chart
 def oi_marks(series: list[Snapshot], window: int = 5, pct: float = 3.0, each_side: int = 2) -> list[dict]:
     """CALLS / PUTS ADDED or EXITING: near-the-money OI change over ``window`` minutes beyond ``pct`` %."""

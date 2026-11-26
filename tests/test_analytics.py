@@ -143,3 +143,25 @@ def test_two_short_cov_strikes_get_no_arrow():
     oi = {(k, "CE"): 1000 + abs(k - 25400) - (300 if k in (25500, 25550) else 0) for k in range(24850, 25951, 50)}
     table = chain_table(snap(15, fwd=25430, oi=oi), before, 8)
     assert not any(r["call"]["arrow"] for r in table)
+
+
+def test_pricing_box_dear_side_bias_and_expected_rupees():
+    from desk.analytics import pricing, realized_vol
+    from desk.black76 import price as b76
+    s = snap(0)                                                   # options' forward 25400, IV 21%, 10:00
+    q = pricing(s, fut_price=25390, spot=25380, fut_expiry_ts=None, at_open=None, realized=None,
+                lean="BULLISH", now_ts=s.ts)
+    assert q["dear"] == "calls" and q["parity_gap"] == pytest.approx(10, abs=0.6) and q["bias"] == "CALL SIDE"
+    q2 = pricing(s, fut_price=25412, spot=25400, fut_expiry_ts=None, at_open=None, realized=None,
+                 lean="MIXED", now_ts=s.ts)
+    assert q2["dear"] == "puts" and q2["bias"] == "NEUTRAL"               # one vote is not enough
+    h = next(x for x in q["horizons"] if x["minutes"] == 60)
+    assert h["move"] == pytest.approx(25400 * 0.21 * (60 / (252 * 375)) ** 0.5, rel=0.01)
+    # the rupee estimate agrees with re-pricing the ATM call after the move and one hour of time
+    years = s.years
+    full = b76(25400 + h["move"], 25400, years - 1 / 24 / 365 * (24 / 6.25) * 0 - 60 / (375 * 365), 0.21, True) - \
+        b76(25400, 25400, years, 0.21, True)
+    assert h["ce"][1] == pytest.approx(full, rel=0.12)
+    assert 0 < h["ce"][0] < h["ce"][1]
+    assert realized_vol([100 + (i % 2) * 0.1 for i in range(61)]) > 0
+    assert realized_vol([100.0] * 5) is None

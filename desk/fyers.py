@@ -303,6 +303,7 @@ class Contracts:
     puts: dict
     future: Optional[str]   # nearest futures contract (its volume feeds VWAP: the index has none)
     next_future: Optional[str] = None   # the month after (owner: near and / or next future on the spot chart)
+    future_expiry: Optional[date] = None
 
 
 def nearest_contracts(master: dict, underlying: str, today: date) -> Contracts:
@@ -333,7 +334,8 @@ def nearest_contracts(master: dict, underlying: str, today: date) -> Contracts:
     return Contracts(expiry, lots[0] if lots else 1, step,
                      {r[0]: r[2] for r in rows if r[1] == "CE"}, {r[0]: r[2] for r in rows if r[1] == "PE"},
                      min(futures)[1] if futures else None,
-                     sorted(futures)[1][1] if len(futures) > 1 else None)
+                     sorted(futures)[1][1] if len(futures) > 1 else None,
+                     min(futures)[0] if futures else None)
 
 
 def chain_strikes(c: Contracts, spot: float, width: int) -> list[float]:

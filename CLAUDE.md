@@ -19,6 +19,12 @@
   all bars right-anchored on BOTH sides. Trapped / heaviest hedging = dots on the chart (hover) + side panel
   "Trapped and key levels", never long labels. Main chart default = SPOT (futures volume); tick-boxes add near /
   next future lines. FYERS Standard plan = 5 requests/s (error -360): every REST call goes through fyers.paced (~4/s).
+- Owner 26 Nov 2026: chart profiles OI / OI chg / Delta / GEX side by side in their own columns (tick-boxes
+  oi_total, oi_change, prof_dex, prof_gex), never overlapping. Box "CALLS VS PUTS" (analytics.pricing): dear side =
+  options' forward (K + C - P at ATM) vs fair forward from the future (carry scaled to this expiry); bias = 2 of 3
+  votes (parity, 25-delta skew change since open, OI lean); expected move = index x avg(ATM IV, last-hour realised)
+  x sqrt(minutes / (252 x 375)); ATM CE / PE rupees = |delta| m + 1/2 gamma m^2 - theta x minutes/375, for half to
+  one expected move, next 30 / 60 min and rest of day. Maths, not a direction forecast.
 - OPTION ARBITRAGE (owner 26 Nov 2026): docs/OPTION_ARBITRAGE.md, package arbitrage/ (core, costs, universe, history,
   report, live), arb_history.py + arbitrage_history.bat (1 year, resumable cache data/arbitrage/cache.sqlite, newest
   first, stops at 90k FYERS calls), arb_live.py + arbitrage_live.bat (market hours, option ASK vs future bid/ask).

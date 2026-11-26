@@ -21,7 +21,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from desk.analytics import (TrapBook, chain_table, hedging, lakh, oi_marks, option_maths, options_saying, summary)
+from desk.analytics import (TrapBook, chain_table, hedging, lakh, oi_marks, option_maths, options_saying, pricing,
+                            realized_vol, summary)
 from desk.candles import IST, Candle, local, resample
 from desk.chain import Snapshot, SnapshotStore, parse
 from desk.flow import avg_daily_move, buy_sell, day_levels, divergences, ema, split_volume, vwap
@@ -77,6 +78,7 @@ class Market:
     nxt_min: list = field(default_factory=list)       # next month's future (line on the spot chart)
     week_base: dict = field(default_factory=dict)     # "strike|side" -> OI (lots) at the previous expiry's close
     week_tried: set = field(default_factory=set)
+    future_expiry: Optional[date] = None
     opt_min: dict = field(default_factory=dict)       # symbol -> [Candle]
     series: list = field(default_factory=list)        # minute snapshots of today (last one = latest)
     book: TrapBook = field(default_factory=TrapBook)
@@ -170,6 +172,7 @@ class DeskService:
             today = self.clock().date()
             c = nearest_contracts(self.master_loader(info.master, today), info.underlying, today)
             m = Market(index, c.lot_size, c.expiry, c.future, c.next_future, c.calls, c.puts)
+            m.future_expiry = c.future_expiry
             m.week_base = self._load_week(index, c.expiry)
             m.series = self.store.series(index, today)
             for a, b in zip(m.series, m.series[1:]):
@@ -301,6 +304,7 @@ class DeskService:
                                     f"{r['under_water'] * 100:.0f}% down"})
         ce, pe = self.atm_symbols(index)
         a = snap.row(snap.atm) if snap.atm else None
+        px = snap.forward or snap.spot or 0.0
         out = {
             "type": "analytics", "index": index, "ts": snap.ts, "expiry": snap.expiry, "lot": m.lot,
             "summary": s, "saying": saying,
@@ -310,7 +314,12 @@ class DeskService:
             "oi_series": [{"time": x.ts, "calls": sum(r.call.oi_change for r in x.rows),
                            "puts": sum(r.put.oi_change for r in x.rows)} for x in m.series],
             "profile": [{"strike": r.strike, "call_oi": r.call.oi, "put_oi": r.put.oi, "call_ch": r.call.oi_change,
-                         "put_ch": r.put.oi_change} for r in snap.rows],
+                         "put_ch": r.put.oi_change,
+                         "call_dex": (r.call.delta or 0) * r.call.oi, "put_dex": (r.put.delta or 0) * r.put.oi,
+                         "call_gex": (r.call.gamma or 0) * r.call.oi * snap.lot_size * px * px * 0.01,
+                         "put_gex": (r.put.gamma or 0) * r.put.oi * snap.lot_size * px * px * 0.01}
+                        for r in snap.rows],
+            "pricing": self._pricing(m, snap, at_open, saying["lean"]),
             "marks": sorted(marks, key=lambda x: x["ts"]), "levels": levels,
             "live": {"future": m.future, "atm": snap.atm, "ce": ce, "pe": pe,
                      "ce_ltp": a.call.ltp if a else None, "pe_ltp": a.put.ltp if a else None,
@@ -319,6 +328,19 @@ class DeskService:
         }
         m.last = out
         return out
+
+    def _pricing(self, m: Market, snap: Snapshot, at_open: Snapshot, lean: str) -> dict:
+        today = self.clock().date()
+        idx_today = [c.close for c in m.idx_min if local(c.ts).date() == today][-61:]
+        fut = m.fut_min[-1].close if m.fut_min else None
+        spot = snap.spot or (m.idx_min[-1].close if m.idx_min else None)
+        fexp = int(datetime.combine(m.future_expiry, datetime.min.time(), IST).replace(hour=15, minute=30).timestamp()) \
+            if m.future_expiry else None
+        try:
+            return pricing(snap, fut_price=fut, spot=spot, fut_expiry_ts=fexp, at_open=at_open,
+                           realized=realized_vol(idx_today), lean=lean, now_ts=snap.ts)
+        except Exception as exc:                       # never let this box break the page
+            return {"ready": False, "error": str(exc)[:120]}
 
     def bars(self, index: str) -> dict:
         m = self.market(index)
