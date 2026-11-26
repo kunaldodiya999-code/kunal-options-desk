@@ -14,6 +14,12 @@ Runs only on your PC (127.0.0.1). It places NO orders (trading comes in phase 3,
 
 To stop the desk: click its black window and press Ctrl+C (or just close the window).
 
+## Option arbitrage scanner (separate tool, see docs/OPTION_ARBITRAGE.md)
+| File | What it does |
+|---|---|
+| `arbitrage_history.bat` | Checks the last year for options that traded 5%+ below their value. Several hours; resumes. |
+| `arbitrage_live.bat` | During market hours, looks for them live (option ask vs future). Never places orders. |
+
 ## FYERS login
 The desk reads your FYERS app details (App ID, Secret, Redirect URL) from the `kunal-fyers-terminal` folder when it
 sits next to this one, and uses the terminal's login of today. Otherwise the page asks for them once and you log in

@@ -19,6 +19,12 @@
   all bars right-anchored on BOTH sides. Trapped / heaviest hedging = dots on the chart (hover) + side panel
   "Trapped and key levels", never long labels. Main chart default = SPOT (futures volume); tick-boxes add near /
   next future lines. FYERS Standard plan = 5 requests/s (error -360): every REST call goes through fyers.paced (~4/s).
+- OPTION ARBITRAGE (owner 26 Nov 2026): docs/OPTION_ARBITRAGE.md, package arbitrage/ (core, costs, universe, history,
+  report, live), arb_history.py + arbitrage_history.bat (1 year, resumable cache data/arbitrage/cache.sqlite, newest
+  first, stops at 90k FYERS calls), arb_live.py + arbitrage_live.bat (market hours, option ASK vs future bid/ask).
+  Value = FUTURE - strike (calls), strike - FUTURE (puts); index weeklies use index + carry. Owner: only >= 5% below
+  value counts, after every charge. Information only, never orders. Weekly FYERS names NIFTY26N17<strike>: always use
+  option_prefix to read a strike (date digits must never join the strike).
 - Tests: `python -m pytest tests -q` (tests/conftest.py points KOD_DATA at a temp folder). Demo: `run.py --demo`.
 - Owner request 20 Nov 2026: single page like the "options desk" video (17 Nov) + ODX-style studies. FYERS primary,
   Dhan later. Light/dark TradingView-style chart. OI profile with two tick-boxes: Total (live) OI, OI change today.
