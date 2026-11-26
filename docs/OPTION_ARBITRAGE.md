@@ -48,3 +48,14 @@ Both legs are assumed closed at the value, because brokers close in-the-money st
   - for a put, you buy the future at its ASK.
 - **When it finds 5% or more after charges:** it beeps, prints the opportunity, adds it to `data/arbitrage/live_hits.csv` and shows it on `live.html` (refreshes every 15 s).
 - **It never places an order.**
+
+## FYERS daily limit (found 26 Nov 2026)
+FYERS' Standard plan allows only **5,000 REST calls a day**, shared by everything that uses the same FYERS app: the
+desk, the terminal and these tools. Every program on this PC counts its calls in `data/api_calls.json`.
+- **History check:** it stops at 3,500 calls a run, or sooner so that 1,000 calls are always left for the desk. It also
+  stops at once if FYERS reports the day's limit. A full year of every F&O stock needs roughly 70,000–90,000 calls,
+  which is about 20–25 nightly runs; it resumes each time. To get an answer sooner, run the indexes and recent months
+  first, for example `--indexes-only --days 180`, or `--only RELIANCE,HDFCBANK,... --days 90`.
+- **Live scanner:** it paces itself to about 1,500 calls a day, which works out to roughly one full-market sweep every
+  30 minutes. A truly real-time scan of the whole market would need the FYERS websocket (a later upgrade) or a higher
+  FYERS plan.

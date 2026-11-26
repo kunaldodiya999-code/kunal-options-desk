@@ -36,7 +36,8 @@ def main() -> None:
     ap.add_argument("--indexes-only", action="store_true")
     ap.add_argument("--stocks-only", action="store_true")
     ap.add_argument("--report-only", action="store_true")
-    ap.add_argument("--max-calls", type=int, default=90000, help="stop after this many FYERS calls (daily limit)")
+    ap.add_argument("--max-calls", type=int, default=3500,
+                    help="stop after this many FYERS calls (FYERS allows 5,000 a day for everything)")
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args()
     folder = data_dir() / "arbitrage"

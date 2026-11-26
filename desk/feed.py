@@ -23,9 +23,10 @@ def market_open(now: Optional[datetime] = None) -> bool:
 class Feed:
     def __init__(self, *, client_id: str, token: str, client, on_quote: Callable[[str, dict], Any],
                  on_order: Optional[Callable[[dict], Any]] = None, log: Callable[[str], Any] = print,
-                 log_path: str = "") -> None:
+                 log_path: str = "", can_rest: Callable[[], bool] = lambda: True) -> None:
         self.client_id, self.token, self.client = client_id, token, client
         self.on_quote_cb, self.on_order_cb, self.log, self.log_path = on_quote, on_order, log, log_path
+        self.can_rest = can_rest
         self.symbols: set[str] = set()
         self.last_tick: dict[str, float] = {}
         self.ws = None
@@ -110,9 +111,9 @@ class Feed:
 
     def _safety_net(self) -> None:
         while not self._stop.is_set():
-            _time.sleep(1.0)
-            if not market_open():              # no ticks come when the market is shut: nothing to back up
-                continue
+            _time.sleep(10.0)                  # FYERS: 5,000 REST calls a day, so the backup is rare
+            if not market_open() or self.connected or not self.can_rest():
+                continue                       # only when the live feed is down and the day's budget allows
             now = _time.monotonic()
             with self._lock:
                 stale = [s for s in self.symbols if now - self.last_tick.get(s, 0) > 3.0]

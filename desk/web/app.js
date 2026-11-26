@@ -694,7 +694,7 @@
       else if (m.type === "bigtrade") onBig(m);
       else if (m.type === "analytics") { if (m.index === view.index) { renderAnalytics(m); $("status").textContent = "live · FYERS"; } }
       else if (m.type === "login") login(m);
-      else if (m.type === "status") $("status").textContent = m.status;
+      else if (m.type === "status") { $("status").textContent = m.status; $("status").classList.toggle("warn", /limit|problem/i.test(m.status)); }
       else if (m.type === "result") { if (!m.ok) { $("l_msg").textContent = m.msg; $("status").textContent = m.msg; } }
     };
   }

@@ -21,6 +21,7 @@ from arbitrage.costs import Costs
 from arbitrage.history import DEPTH, close_ts
 from arbitrage.universe import Underlying, monthly
 from desk.candles import IST
+from desk.fyers import RESERVE, Budget, DailyLimit
 
 
 def market_open(now: datetime) -> bool:
@@ -100,7 +101,9 @@ with the future at the price you would trade it. Net = after every charge, per l
 
 def run(client: Any, load_universe: Callable[[date], dict], folder: Path, costs: Costs, *,
         clock: Callable[[], datetime] = lambda: datetime.now(IST), log: Callable[[str], Any] = print,
-        sweeps: Optional[int] = None, sleep=_time.sleep) -> None:
+        sweeps: Optional[int] = None, sleep=_time.sleep, allowance: int = 1500) -> None:
+    """allowance = FYERS calls this scanner may use in a day (FYERS allows 5,000 for everything). The pause between
+    sweeps is worked out from it: about 120 calls a sweep -> roughly one sweep every 30 minutes."""
     folder.mkdir(parents=True, exist_ok=True)
     page, hits_csv = folder / "live.html", folder / "live_hits.csv"
     seen: dict[str, float] = {}
@@ -118,8 +121,24 @@ def run(client: Any, load_universe: Callable[[date], dict], folder: Path, costs:
             day, today_hits, seen = now.date(), [], {}
             jobs = plan(load_universe(day), day)
             log(f"{len(jobs)} underlyings to scan today")
+        if Budget.left() <= RESERVE:
+            write_page(page, today_hits, f"{now:%d %b %H:%M:%S}: stopped for today - only {Budget.left()} FYERS calls "
+                                         f"left (FYERS allows 5,000 a day; {RESERVE} kept for the desk).")
+            if sweeps is not None:
+                return
+            sleep(300)
+            continue
         t0 = _time.monotonic()
-        hits, checked = sweep(client, jobs, costs, now)
+        before = Budget.used()
+        try:
+            hits, checked = sweep(client, jobs, costs, now)
+        except DailyLimit as exc:
+            write_page(page, today_hits, f"{now:%d %b %H:%M:%S}: {exc}")
+            if sweeps is not None:
+                return
+            sleep(600)
+            continue
+        cost = max(1, Budget.used() - before)
         n += 1
         new = []
         for h in hits:
@@ -140,8 +159,13 @@ def run(client: Any, load_universe: Callable[[date], dict], folder: Path, costs:
                     f"{h['intrinsic']}, net Rs {h['net']:,.0f} per lot ({h['ret'] * 100:.1f}% on Rs {h['capital']:,.0f})")
         status = (f"{now:%d %b %H:%M:%S}: sweep {n} checked {checked} options in {_time.monotonic() - t0:.0f} s; "
                   f"{len(hits)} at 5%+ now, {len(today_hits)} found today")
+        sweeps_per_day = max(1, allowance // cost)
+        pause = max(60.0, 375 * 60 / sweeps_per_day - (_time.monotonic() - t0))
+        status += f"; next sweep in {pause / 60:.0f} min (this sweep used {cost} of the day's FYERS calls)"
         write_page(page, today_hits, status)
         log(status)
+        if sweeps is None or n < sweeps:
+            sleep(pause)
 
 
 __all__ = ["market_open", "plan", "run", "sweep", "write_page"]

@@ -191,9 +191,80 @@ class _Pace:
             cls.last = _time.monotonic()
 
 
+DAILY_LIMIT = 5000          # FYERS Standard plan: 5,000 REST requests a day (error -360 "requests/day", 26 Nov 2026)
+RESERVE = 1000              # the arbitrage tools always leave this much for the desk
+
+
+class DailyLimit(Exception):
+    """FYERS' daily request limit is used up: no REST calls until tomorrow (the live price feed still works)."""
+
+
+class Budget:
+    """Counts this PC's FYERS REST calls per day in data/api_calls.json (desk and arbitrage tools together)."""
+    lock = threading.Lock()
+
+    @staticmethod
+    def _path() -> Path:
+        return data_dir() / "api_calls.json"
+
+    @classmethod
+    def read(cls) -> dict:
+        today = datetime.now(IST).date().isoformat()
+        try:
+            d = json.loads(cls._path().read_text(encoding="utf-8"))
+            if d.get("date") == today:
+                return d
+        except (OSError, ValueError):
+            pass
+        return {"date": today, "count": 0, "exhausted": False}
+
+    @classmethod
+    def _write(cls, d: dict) -> None:
+        try:
+            cls._path().parent.mkdir(parents=True, exist_ok=True)
+            cls._path().write_text(json.dumps(d), encoding="utf-8")
+        except OSError:
+            pass
+
+    @classmethod
+    def used(cls) -> int:
+        return cls.read()["count"]
+
+    @classmethod
+    def left(cls) -> int:
+        d = cls.read()
+        return 0 if d.get("exhausted") else max(0, DAILY_LIMIT - d["count"])
+
+    @classmethod
+    def add(cls, n: int = 1) -> None:
+        with cls.lock:
+            d = cls.read()
+            d["count"] += n
+            cls._write(d)
+
+    @classmethod
+    def exhaust(cls) -> None:
+        with cls.lock:
+            d = cls.read()
+            d["exhausted"] = True
+            cls._write(d)
+
+
+def is_daily_limit(answer: Any) -> bool:
+    text = str(answer).lower()
+    return "-360" in text and ("/day" in text or "per day" in text or "a day" in text)
+
+
 def paced(fn, *args, **kwargs):
+    if Budget.left() <= 0:
+        raise DailyLimit("FYERS daily limit (5,000 calls) is used up for today; it resets tomorrow")
     _Pace.wait()
-    return fn(*args, **kwargs)
+    Budget.add()
+    answer = fn(*args, **kwargs)
+    if is_daily_limit(answer):
+        Budget.exhaust()
+        raise DailyLimit("FYERS daily limit (5,000 calls) is used up for today; it resets tomorrow")
+    return answer
 
 
 class Fyers:
@@ -348,6 +419,6 @@ def chain_strikes(c: Contracts, spot: float, width: int) -> list[float]:
     return both[max(0, i - width): i + width + 1]
 
 
-__all__ = ["Contracts", "DATA", "data_dir", "Fyers", "INDEXES", "IndexInfo", "auth_code_from", "chain_strikes", "credentials",
+__all__ = ["Budget", "DAILY_LIMIT", "DailyLimit", "RESERVE", "is_daily_limit", "Contracts", "DATA", "data_dir", "Fyers", "INDEXES", "IndexInfo", "auth_code_from", "chain_strikes", "credentials",
            "exchange_code", "load_master", "login_url", "nearest_contracts", "read_env", "save_token",
            "saved_token", "write_env"]

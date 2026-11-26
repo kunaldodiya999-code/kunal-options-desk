@@ -179,3 +179,16 @@ def test_strike_never_takes_the_date_digits():
     pre = option_prefix(n, date(2026, 11, 17), False)
     assert pre == "NSE:NIFTY26N17" and strike_of("NSE:NIFTY26N1725000CE", "CE", pre) == 25000
     assert strike_of("NSE:ABC26OCT900CE", "CE") == 900 and strike_of("NSE:ABC26OCT12.5PE", "PE") == 12.5
+
+
+def test_history_stops_cleanly_at_the_fyers_daily_limit(setup):
+    uni, model, cache, f = setup
+
+    class Refuses(FakeModel):
+        def fno_historical_data(self, data):
+            return {"s": "error", "code": -360, "message": "Standard plan limit of 5,000 requests/day"}
+    f.model = Refuses()
+    r = Runner(f, uni, Costs(), days=90, log=lambda s: None)
+    with pytest.raises(Stop) as e:
+        r.run(r.jobs(), cache)
+    assert "tomorrow" in str(e.value) and f.calls < 10

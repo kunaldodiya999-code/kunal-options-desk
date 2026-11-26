@@ -95,3 +95,4 @@ html.dark .hovercard { background:rgba(19,23,34,.38); border-color:rgba(255,255,
 .mini .legend .g { color:var(--green); } .mini .legend .r { color:var(--red); } .mini .legend .b { color:var(--blue); }
 #levels .lvl span.stake { display:block; color:var(--amber); }
 #flow { position:relative; }
+#status { max-width:520px; font-size:12px; line-height:1.3; } #status.warn { color:var(--red); font-weight:600; }

@@ -17,7 +17,7 @@ import socket
 import threading
 import time as _time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -27,7 +27,7 @@ from desk.candles import IST, Candle, local, resample
 from desk.chain import Snapshot, SnapshotStore, parse
 from desk.flow import (avg_daily_move, bollinger, buy_sell, day_levels, day_profile, divergences, ema, split_volume,
                        vwap, vwap_bands)
-from desk.fyers import (INDEXES, Fyers, auth_code_from, clear_token, credentials, data_dir, exchange_code, load_master,
+from desk.fyers import (INDEXES, Budget, DailyLimit, Fyers, auth_code_from, clear_token, credentials, data_dir, exchange_code, load_master,
                         login_url, nearest_contracts, save_token, saved_token, write_env)
 
 LOGIN_WORDS = ("token", "authenticat", "unauthor", "'code': -8,", "'code': -15,", "'code': -16,", "'code': -17,",
@@ -44,7 +44,8 @@ from desk.ticks import TickRecorder
 
 WEB = Path(__file__).resolve().parent / "web"
 LIB = Path(__file__).resolve().parents[1] / "static" / "lightweight-charts" / "lightweight-charts.standalone.production.js"
-CHAIN_EVERY = 10.0
+CHAIN_EVERY = 60.0          # FYERS allows only 5,000 calls a day (26 Nov 2026): the chain once a minute
+BARS_REST_EVERY = 900.0     # candles come from the live price feed; FYERS history only every 15 minutes to correct
 CHAIN_STRIKES = 20
 
 
@@ -103,6 +104,9 @@ class DeskService:
         self.store = SnapshotStore(self.folder / "chain")
         self.ticks = TickRecorder(self.folder / "ticks")
         self.big = BigTrades(self.folder / "bigtrades")
+        self._cum_vol: dict[str, float] = {}
+        self._last_rest = 0.0
+        self.limited = False
         self.last_ltp: dict[str, float] = {}
         self.view = View()
         self.markets: dict[str, Market] = {}
@@ -135,7 +139,8 @@ class DeskService:
         if self.start_feed:
             from desk.feed import Feed
             self.feed = Feed(client_id=client_id, token=token, client=self.client, on_quote=self._on_tick,
-                             log=self.note, log_path=str(self.folder / "logs"))
+                             log=self.note, log_path=str(self.folder / "logs"),
+                             can_rest=lambda: not self.limited and Budget.left() > 1000)
             self.feed.start()
         self.status = "connected"
         self.note("FYERS connected")
@@ -202,19 +207,89 @@ class DeskService:
         self.store.put(snap)
         return snap
 
-    def refresh_bars(self, index: str) -> None:
-        m = self.market(index)
+    # ------------------------------------------------------------------ candles: saved copy + live feed + FYERS
+    def _min_path(self, sym: str) -> Path:
+        return self.folder / "minutes" / (sym.replace(":", "_").replace("/", "_") + ".json")
+
+    def _load_min(self, sym: str) -> list:
+        try:
+            return [Candle(*r) for r in json.loads(self._min_path(sym).read_text(encoding="utf-8"))]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def _save_min(self, sym: str, rows: list) -> None:
+        cutoff = int((datetime.now(IST) - timedelta(days=8)).timestamp())
+        p = self._min_path(sym)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps([[c.ts, c.open, c.high, c.low, c.close, c.volume] for c in rows if c.ts >= cutoff]),
+                     encoding="utf-8")
+
+    def _fetch_min(self, sym: str, days: int, have: list) -> list:
+        """FYERS history only for what the saved copy lacks: 6 days the first time, then today only."""
         today = self.clock().date()
-        start = today - timedelta(days=6)
+        saved = {c.ts: c for c in (have or self._load_min(sym))}
+        older = any(local(t).date() < today for t in saved)
+        start = today if (older and days > 0) or days == 0 else today - timedelta(days=days)
+        got = self.client.minutes(sym, start, today)
+        saved.update({c.ts: c for c in got})
+        rows = sorted(saved.values(), key=lambda c: c.ts)
+        self._save_min(sym, rows)
+        return rows
+
+    def refresh_bars(self, index: str, options_only: bool = False) -> None:
+        m = self.market(index)
         info = INDEXES[index]
-        if m.future:
-            m.fut_min = self.client.minutes(m.future, start, today)
-        m.idx_min = self.client.minutes(info.spot, start, today)
-        if m.next_future:
-            m.nxt_min = self.client.minutes(m.next_future, start, today)
+        if not options_only:
+            if m.future:
+                m.fut_min = self._fetch_min(m.future, 6, m.fut_min)
+            m.idx_min = self._fetch_min(info.spot, 6, m.idx_min)
+            if m.next_future:
+                m.nxt_min = self._fetch_min(m.next_future, 6, m.nxt_min)
         for sym in self.atm_symbols(index):
-            if sym:
-                m.opt_min[sym] = self.client.minutes(sym, today, today)
+            if sym and (not options_only or sym not in m.opt_min):
+                m.opt_min[sym] = self._fetch_min(sym, 0, m.opt_min.get(sym, []))
+
+    def load_saved(self, index: str) -> None:
+        """Show what is saved on this PC straight away (no FYERS call)."""
+        m = self.market(index)
+        if not m.idx_min:
+            m.idx_min = self._load_min(INDEXES[index].spot)
+        if m.future and not m.fut_min:
+            m.fut_min = self._load_min(m.future)
+        if m.next_future and not m.nxt_min:
+            m.nxt_min = self._load_min(m.next_future)
+
+    def _live_candle(self, symbol: str, q: dict) -> None:
+        """Every live price builds the current 1-minute candle (no FYERS REST call needed)."""
+        m = self.markets.get(self.view.index)
+        ltp = q.get("ltp")
+        if not m or not ltp:
+            return
+        if symbol == INDEXES[self.view.index].spot:
+            name = "idx_min"
+        elif symbol == m.future:
+            name = "fut_min"
+        elif symbol == m.next_future:
+            name = "nxt_min"
+        elif symbol in m.opt_min:
+            name = None
+        else:
+            return
+        rows = getattr(m, name) if name else m.opt_min[symbol]
+        vol, prev = q.get("vol"), self._cum_vol.get(symbol)
+        if vol is not None:
+            self._cum_vol[symbol] = vol
+        add = max(0.0, float(vol) - float(prev)) if vol is not None and prev is not None else 0.0
+        now = datetime.now(IST)
+        if not (now.weekday() < 5 and time(9, 15) <= now.time() < time(15, 30)):
+            return
+        minute = int(now.timestamp()) // 60 * 60
+        with self.lock:
+            if rows and rows[-1].ts == minute:
+                c = rows[-1]
+                rows[-1] = Candle(c.ts, c.open, max(c.high, ltp), min(c.low, ltp), ltp, c.volume + add)
+            elif not rows or rows[-1].ts < minute:
+                rows.append(Candle(minute, ltp, ltp, ltp, ltp, add))
 
     # ------------------------------------------------------------------ Week column (OI since the series began)
     def week_file(self, index: str, expiry) -> Path:
@@ -409,6 +484,10 @@ class DeskService:
     # ------------------------------------------------------------------ live ticks
     def _on_tick(self, symbol: str, q: dict) -> None:
         self.ticks.add(symbol, q)
+        try:
+            self._live_candle(symbol, q)
+        except Exception:
+            pass
         if q.get("ltp"):
             self.last_ltp[symbol] = q["ltp"]
         try:
@@ -455,22 +534,50 @@ class DeskService:
                 if self.client is None:
                     return [self.login_info()]
                 self._next_bars = 0.0
-                out = []
+                out, problems = [], []
+                idx = self.view.index
                 try:
-                    m = self.market(self.view.index)
-                    if not m.fut_min:
-                        self.refresh_bars(self.view.index)
-                    if not m.series:
-                        self.refresh_chain(self.view.index)
-                    out = [self.bars(self.view.index), self.analytics(self.view.index)]
+                    self.market(idx)
+                    self.load_saved(idx)
                 except Exception as exc:
-                    if login_problem(exc):
-                        self.logout(str(exc))
-                        return [self.login_info()]
-                    out = [{"type": "result", "op": "view", "ok": False, "msg": f"{exc}"}]
+                    return [{"type": "result", "op": "view", "ok": False, "msg": f"{exc}"}]
+                m = self.markets[idx]
+                for step in (lambda: None if m.fut_min and m.idx_min and self._today_in(m.idx_min)
+                             else self.refresh_bars(idx),
+                             lambda: self.refresh_bars(idx, options_only=True),
+                             lambda: None if m.series else self.refresh_chain(idx)):
+                    try:
+                        step()
+                    except DailyLimit as exc:
+                        self.limited = True
+                        problems.append(str(exc))
+                        break
+                    except Exception as exc:
+                        if login_problem(exc):
+                            self.logout(str(exc))
+                            return [self.login_info()]
+                        problems.append(str(exc)[:160])
+                for make in (self.bars, self.analytics):
+                    try:
+                        out.append(make(idx))
+                    except Exception as exc:
+                        problems.append(f"{make.__name__}: {str(exc)[:120]}")
+                if problems:
+                    self.status = "problem: " + problems[0]
+                    out.append({"type": "status", "status": self.status_text()})
                 self._subscribe()
                 return out
         return [{"type": "result", "op": op, "ok": False, "msg": "unknown command"}]
+
+    def _today_in(self, rows: list) -> bool:
+        return bool(rows) and local(rows[-1].ts).date() == self.clock().date()
+
+    def status_text(self) -> str:
+        used = Budget.used()
+        if self.limited or Budget.left() <= 0:
+            return (f"FYERS daily limit reached (5,000 calls) - live prices continue, the rest is saved data until "
+                    f"tomorrow · calls today {used:,}")
+        return f"{self.status} · FYERS calls today {used:,} / 5,000"
 
     def _subscribe(self) -> None:
         if not self.feed:
@@ -492,17 +599,30 @@ class DeskService:
                 with self.lock:
                     idx = self.view.index
                     mono = _time.monotonic()
+                    can_rest = not self.limited and Budget.left() > 50
                     if mono >= self._next_bars:
-                        self.refresh_bars(idx)
+                        if can_rest and mono - self._last_rest >= BARS_REST_EVERY:
+                            self._last_rest = mono
+                            self.refresh_bars(idx)
+                        elif can_rest:
+                            self.refresh_bars(idx, options_only=True)    # only a new ATM strike costs a call
                         self._subscribe()
                         self.broadcast(self.bars(idx))
                         self._next_bars = mono + (60 - self.clock().second) + 3
-                    if mono - last_chain >= CHAIN_EVERY:
+                    if can_rest and mono - last_chain >= CHAIN_EVERY:
                         last_chain = mono
                         self.refresh_chain(idx)
-                        self.fill_week(idx)
+                        if Budget.left() > 1500:
+                            self.fill_week(idx)
                         self.broadcast(self.analytics(idx))
-                self.status = "live"
+                if not self.limited:
+                    self.status = "live"
+                self.broadcast({"type": "status", "status": self.status_text()}) if int(mono) % 15 == 0 else None
+            except DailyLimit as exc:
+                self.limited = True
+                self.note(str(exc))
+                self.broadcast({"type": "status", "status": self.status_text()})
+                _time.sleep(5)
             except Exception as exc:
                 if login_problem(exc):
                     with self.lock:

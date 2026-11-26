@@ -22,6 +22,7 @@ from arbitrage.costs import Costs
 from arbitrage.universe import (INDEX_NAMES, Underlying, find_dates, find_symbols, from_master, future_symbol, monthly,
                                 option_prefix, option_symbol, strike_of, window)
 from desk.candles import IST
+from desk.fyers import RESERVE, Budget, is_daily_limit
 
 DEPTH = {True: 0.06, False: 0.15}      # how far in the money to look (index, stock)
 GAP = 0.34                              # seconds between FYERS calls (about 3 a second: safe under 5/s and 200/min)
@@ -66,27 +67,39 @@ class Cache:
 class Fetcher:
     """Every FYERS call: paced, retried on 'too many requests', counted, answers cached."""
 
-    def __init__(self, model: Any, cache: Cache, today: date, *, max_calls: int = 90000,
-                 log: Callable[[str], Any] = print, gap: float = GAP, sleep=_time.sleep) -> None:
+    def __init__(self, model: Any, cache: Cache, today: date, *, max_calls: int = 4000,
+                 log: Callable[[str], Any] = print, gap: float = GAP, sleep=_time.sleep,
+                 use_budget: bool = True) -> None:
         self.model, self.cache, self.today, self.max_calls, self.log = model, cache, today, max_calls, log
         self.gap, self.sleep = gap, sleep
+        self.use_budget = use_budget
         self.calls = 0
         self._last = 0.0
 
     def _call(self, fn, data: dict) -> Any:
         for attempt in range(6):
             if self.calls >= self.max_calls:
-                raise Stop(f"reached {self.max_calls} FYERS calls for this run (FYERS daily limit). "
+                raise Stop(f"reached {self.max_calls} FYERS calls for this run. "
                            "Run it again tomorrow: it carries on where it stopped.")
+            if self.use_budget and Budget.left() <= RESERVE:
+                raise Stop(f"only {Budget.left()} FYERS calls left today (FYERS allows 5,000 a day); keeping "
+                           f"{RESERVE} for the desk. Run it again tomorrow: it carries on where it stopped.")
             wait = self.gap - (_time.monotonic() - self._last)
             if wait > 0:
                 self.sleep(wait)
             self._last = _time.monotonic()
             self.calls += 1
+            if self.use_budget:
+                Budget.add()
             try:
                 answer = fn(data)
             except Exception as exc:                       # network hiccup
                 answer = {"s": "error", "message": str(exc)}
+            if is_daily_limit(answer):
+                if self.use_budget:
+                    Budget.exhaust()
+                raise Stop("FYERS says today's 5,000 calls are used up. Run it again tomorrow: it carries on where "
+                           "it stopped.")
             text = str(answer)[:300].lower()
             if isinstance(answer, dict) and answer.get("s") != "ok" and ("limit" in text or "-429" in text or
                                                                          "too many" in text):

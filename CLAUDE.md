@@ -38,6 +38,13 @@
   futures' trades drawn at the index price on the spot chart; option charts show their own. SMC (desk/smc.py):
   BOS / CHoCH, order blocks (last 3 each way, last few sessions, <= 0.6% tall), today's open FVGs (last 4),
   premium / discount. Guide for the owner: docs/DESK_GUIDE.pdf (screens from the demo).
+- FYERS DAILY LIMIT (26 Nov 2026): Standard plan = 5,000 REST calls/DAY (and 5/s), shared by desk + terminal +
+  arbitrage. desk.fyers.Budget counts calls per day in data/api_calls.json; paced() raises DailyLimit when FYERS says
+  "requests/day" (is_daily_limit). Desk: candles from the live websocket (_live_candle), REST history only at start
+  (saved copy in data/minutes, then today only) and every 15 min; chain every 60 s; backup quotes only when the feed
+  is down; at the limit the page keeps working on saved data + live prices (status turns red). Arbitrage history
+  stops at 3,500/run and keeps RESERVE 1,000; the live scanner paces itself to ~1,500/day. Never design a loop that
+  calls FYERS REST every few seconds.
 - OPTION ARBITRAGE (owner 26 Nov 2026): docs/OPTION_ARBITRAGE.md, package arbitrage/ (core, costs, universe, history,
   report, live), arb_history.py + arbitrage_history.bat (1 year, resumable cache data/arbitrage/cache.sqlite, newest
   first, stops at 90k FYERS calls), arb_live.py + arbitrage_live.bat (market hours, option ASK vs future bid/ask).
